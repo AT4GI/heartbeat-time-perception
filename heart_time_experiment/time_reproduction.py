@@ -17,6 +17,7 @@ time_reproduction.py
 """
 
 from psychopy import visual, core, event, data, gui
+from psychopy.hardware.keyboard import Keyboard
 import random
 import csv
 import os
@@ -25,15 +26,15 @@ from pythonosc import udp_client
 
 # ===== 設定 =====
 SC_IP = "127.0.0.1"
-SC_PORT = 57120
+SC_PORT = 57055  # sclang に openUDPPort で固定した Python 用ポート
 
 # 実験パラメータ
-TARGET_DURATIONS = [4.0, 8.0, 12.0]   # 目標時間（秒）
-TRIALS_PER_CELL = 6                     # 各条件×各時間の試行数
-HABITUATION_SEC = 180                   # 慣れフェーズ（3分）
-PRACTICE_TRIALS = 2                     # 練習試行数（各時間）
-INTER_TRIAL_INTERVAL = 2.0             # 試行間インターバル（秒）
-CONDITION_BREAK_SEC = 300              # 条件間休憩（5分）
+TARGET_DURATIONS = [4.0, 8.0, 12.0]        # 目標時間（秒）
+PRACTICE_DURATIONS = [3.0, 6.0, 10.0]     # 練習用時間（本番と異なる値でノイズを防ぐ）
+TRIALS_PER_CELL = 3                        # 各条件×各時間の試行数
+HABITUATION_SEC = 60                       # 慣れフェーズ（60秒）
+INTER_TRIAL_INTERVAL = 2.0                 # 試行間インターバル（秒）
+CONDITION_BREAK_SEC = 180                  # 条件間休憩（3分）
 
 # 条件設定
 CONDITIONS = [
@@ -59,12 +60,9 @@ COUNTERBALANCE_ORDERS = [
 # ===== OSCクライアント =====
 osc_client = udp_client.SimpleUDPClient(SC_IP, SC_PORT)
 
-def send_osc(address, value=None):
-    """SuperColliderにOSCメッセージを送信"""
-    if value is not None:
-        osc_client.send_message(address, value)
-    else:
-        osc_client.send_message(address, [])
+def send_osc(address, value=1):
+    """SuperColliderにOSCメッセージを送信（SC 3.13 は引数なしメッセージを受信できないため常に引数を付ける）"""
+    osc_client.send_message(address, value)
 
 # ===== 参加者情報の取得 =====
 def get_participant_info():
@@ -151,20 +149,11 @@ def habituation_phase(win, condition_name, condition_instruction, duration=180):
     被験者は目を閉じて座っているだけ
     """
     # OSCで振動開始
-    send_osc("/heartbeat/condition", condition_name)
-    send_osc("/heartbeat/start", 1.2)  # woojer_controllerが適切なrateを設定
-
-    instruction_text = (
-        f"これから3分間、振動を体験していただきます。\n\n"
-        f"【{condition_instruction}】\n\n"
-        f"目を閉じて、リラックスして座っていてください。\n"
-        f"何もする必要はありません。\n\n"
-        f"3分後に次の指示が表示されます。"
-    )
+    send_osc("/heartbeat/condition", condition_name)  # SC側が自動で振動開始
 
     stim = visual.TextStim(
-        win, text=instruction_text,
-        height=0.055, wrapWidth=1.6,
+        win, text="",
+        height=0.05, wrapWidth=1.7,
         color="white"
     )
 
@@ -173,10 +162,13 @@ def habituation_phase(win, condition_name, condition_instruction, duration=180):
     while timer.getTime() > 0:
         remaining = int(timer.getTime())
         stim.text = (
-            f"これから3分間、振動を体験していただきます。\n\n"
+            f"これから{duration}秒間、振動を体験していただきます。\n"
+            f"You will experience vibration for {duration} seconds.\n\n"
             f"【{condition_instruction}】\n\n"
-            f"目を閉じて、リラックスして座っていてください。\n\n"
-            f"残り時間: {remaining}秒"
+            f"目を閉じて、リラックスして座っていてください。\n"
+            f"Please close your eyes and sit comfortably.\n\n"
+            f"何もする必要はありません。\n"
+            f"You do not need to do anything."
         )
         stim.draw()
         win.flip()
@@ -192,10 +184,9 @@ def run_trial(win, target_duration):
     1試行の時間再生課題
     Returns: 再生時間（秒）
     """
-    clock = core.Clock()
+    kb = Keyboard()
 
-    # 画面中央の丸（マーカー）
-    circle = visual.Circle(win, radius=0.1, fillColor="white", lineColor="white")
+    circle   = visual.Circle(win, radius=0.1, fillColor="white", lineColor="white")
     fixation = visual.TextStim(win, text="+", height=0.1, color="gray")
 
     # --- 1. 開始前の固視点 ---
@@ -203,43 +194,35 @@ def run_trial(win, target_duration):
     win.flip()
     core.wait(INTER_TRIAL_INTERVAL)
 
-    # --- 2. サンプル区間の提示（画面が光る） ---
-    circle.fillColor = "white"
+    # --- 2. サンプル区間の提示 ---
     circle.draw()
     win.flip()
     core.wait(target_duration)
 
-    # --- 3. 消灯（ストップの合図） ---
+    # --- 3. 消灯 ---
     fixation.draw()
     win.flip()
-    core.wait(0.5)  # 0.5秒の空白
+    core.wait(0.5)
 
     # --- 4. 再生の教示 ---
     reproduce_text = visual.TextStim(
         win,
-        text="スペースキーを押している間が\nあなたの回答です",
+        text="スペースキーを押している間が回答です\nHold SPACE for the same duration\n\n同じ長さになったら離してください\nRelease when done",
         height=0.055, color="yellow"
     )
     reproduce_text.draw()
     win.flip()
 
-    # スペースキーが押されるまで待機
-    event.waitKeys(keyList=["space"])
+    # --- 5. 再生区間の計測: press-and-hold ---
+    # waitKeys(waitRelease=True) でキーを押してから離すまでの duration を取得する
+    kb.clearEvents()
+    keys = kb.waitKeys(keyList=["space", "escape"], waitRelease=True)
 
-    # --- 5. 再生区間の計測 ---
-    ready_text = visual.TextStim(win, text="■", height=0.2, color="white")
-    ready_text.draw()
-    win.flip()
-
-    clock.reset()
-    # スペースキーが離されるまで待機
-    event.waitKeys(keyList=["space"])
-    reproduced_duration = clock.getTime()
-
-    # ESCで終了チェック
-    if event.getKeys(["escape"]):
+    if keys and keys[0].name == "escape":
         send_osc("/heartbeat/stop")
         core.quit()
+
+    reproduced_duration = keys[0].duration if keys else 0.0
 
     return reproduced_duration
 
@@ -258,20 +241,20 @@ def run_condition_block(win, condition, block_num, filename, participant_id,
 
     # --- 課題の教示 ---
     task_instruction = (
-        f"【時間再生課題】\n\n"
-        f"画面に白い丸が表示されている間の時間を覚えてください。\n\n"
-        f"丸が消えたら、スペースキーを押している時間で\n"
-        f"同じ長さを再現してください。\n\n"
-        f"数を数えないようにしてください。\n\n"
-        f"準備ができたらスペースキーを押してください。"
+        "【時間再生課題 / Duration Reproduction Task】\n\n"
+        "画面に白い丸が表示されている間の時間を覚えてください。\n"
+        "Remember the duration while a white circle is shown.\n\n"
+        "丸が消えたら、スペースキーを押している時間で同じ長さを再現してください。\n"
+        "When the circle disappears, hold SPACE for the same duration.\n\n"
+        "数を数えないようにしてください。\n"
+        "Please do not count seconds.\n\n"
+        "準備ができたらスペースキーを押してください。\n"
+        "Press SPACE when you are ready."
     )
     show_instruction(win, task_instruction)
 
     # --- 試行リストの作成 ---
-    if is_practice:
-        trials = TARGET_DURATIONS * PRACTICE_TRIALS
-    else:
-        trials = TARGET_DURATIONS * TRIALS_PER_CELL
+    trials = TARGET_DURATIONS * TRIALS_PER_CELL
 
     random.shuffle(trials)
 
@@ -298,14 +281,18 @@ def run_condition_block(win, condition, block_num, filename, participant_id,
 def debrief(win, filename):
     """実験後のデブリーフィング"""
     debrief_text = (
-        "課題は以上で終わりです。お疲れ様でした。\n\n"
-        "いくつか確認させてください。\n\n"
+        "課題は以上で終わりです。お疲れ様でした。\n"
+        "The task is complete. Thank you for your participation.\n\n"
+        "いくつか確認させてください。\n"
+        "Please answer the following questions to the experimenter.\n\n"
         "1. 課題中に秒数を数えましたか？\n"
-        "   （数えた場合はデータを除外します）\n\n"
-        "2. 振動が「自分の心拍」だと感じましたか？\n\n"
-        "3. 振動に違和感を感じた場面はありましたか？\n\n"
-        "実験者にお答えください。\n\n"
-        "スペースキーで終了します。"
+        "   Did you count seconds during the task?\n\n"
+        "2. 振動が「自分の心拍」だと感じましたか？\n"
+        "   Did the vibration feel like your own heartbeat?\n\n"
+        "3. 振動に違和感を感じた場面はありましたか？\n"
+        "   Was there any moment the vibration felt unnatural?\n\n"
+        "スペースキーで終了します。\n"
+        "Press SPACE to finish."
     )
     show_instruction(win, debrief_text)
 
@@ -340,36 +327,50 @@ def main():
 
     # ===== 実験開始の教示 =====
     welcome_text = (
-        "実験にご協力いただきありがとうございます。\n\n"
-        "これから時間知覚に関する実験を行います。\n\n"
-        "実験中は胸に振動デバイスを装着していただきます。\n\n"
-        "詳しい説明は実験者から行います。\n\n"
-        "準備ができたらスペースキーを押してください。"
+        "実験にご協力いただきありがとうございます。\n"
+        "Thank you for participating in this experiment.\n\n"
+        "これから時間知覚に関する実験を行います。\n"
+        "You will participate in a study on time perception.\n\n"
+        "実験中は胸に振動デバイスを装着していただきます。\n"
+        "A vibration device will be attached to your chest.\n\n"
+        "詳しい説明は実験者から行います。\n"
+        "The experimenter will provide detailed instructions.\n\n"
+        "準備ができたらスペースキーを押してください。\n"
+        "Press SPACE when you are ready."
     )
     show_instruction(win, welcome_text)
 
     # ===== 練習試行 =====
     practice_text = (
-        "まず練習を行います。\n\n"
+        "まず練習を行います。\n"
+        "Let's start with practice trials.\n\n"
         "画面に白い丸が表示されている間の時間を覚えて、\n"
-        "スペースキーを押している時間で再現してください。\n\n"
-        "準備ができたらスペースキーを押してください。"
+        "スペースキーを押している時間で再現してください。\n"
+        "Remember the duration while a white circle is shown,\n"
+        "then hold SPACE for the same duration.\n\n"
+        "秒数を数えないようにしてください。\n"
+        "Please do not count seconds.\n\n"
+        "準備ができたらスペースキーを押してください。\n"
+        "Press SPACE when you are ready."
     )
     show_instruction(win, practice_text)
 
-    # 練習は最初の条件（振動なし）で実施
-    for target in TARGET_DURATIONS * PRACTICE_TRIALS:
-        random.shuffle([target])
+    # 練習は振動なし（本番と異なる時間を使用してノイズを防ぐ）
+    practice_targets = PRACTICE_DURATIONS.copy()
+    random.shuffle(practice_targets)
+    for target in practice_targets:
         reproduced = run_trial(win, target)
 
-    show_text_and_wait(win, "練習終了です。\n本番を始めます。", 3.0)
+    show_text_and_wait(win, "練習終了です。本番を始めます。\nPractice complete. The main experiment will now begin.", 3.0)
 
     # ===== 本試行 =====
     for block_num, condition in enumerate(ordered_conditions):
         # ブロック開始の教示
         block_text = (
-            f"ブロック {block_num + 1} / {len(ordered_conditions)}\n\n"
-            f"準備ができたらスペースキーを押してください。"
+            f"ブロック {block_num + 1} / {len(ordered_conditions)}\n"
+            f"Block {block_num + 1} / {len(ordered_conditions)}\n\n"
+            f"準備ができたらスペースキーを押してください。\n"
+            f"Press SPACE when you are ready."
         )
         show_instruction(win, block_text)
 
@@ -382,9 +383,12 @@ def main():
         # ブロック間休憩（最後のブロック以外）
         if block_num < len(ordered_conditions) - 1:
             break_text = (
-                f"休憩してください。\n\n"
-                f"次のブロックまで約5分お待ちください。\n\n"
-                f"準備ができたらスペースキーを押してください。"
+                f"休憩してください。\n"
+                f"Please take a break.\n\n"
+                f"次のブロックまで約3分お待ちください。\n"
+                f"The next block will begin in approximately 3 minutes.\n\n"
+                f"準備ができたらスペースキーを押してください。\n"
+                f"Press SPACE when you are ready."
             )
             show_instruction(win, break_text)
 
