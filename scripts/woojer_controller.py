@@ -88,10 +88,15 @@ CONDITION_MAP = {
 }
 
 async def interactive_menu(stop_event=None):
-    """共通のキー入力ループ（BLE 有無に関わらず共通）"""
+    """共通のキー入力ループ（BLE 有無に関わらず共通）
+    input() は同期ブロッキング呼び出しのため、そのまま呼ぶとasyncioの
+    イベントループ全体が停止し、待機中はBLE通知(heartrate_callback)が
+    一切処理されなくなる（キー入力の瞬間に溜まった通知が一気に流れ込む）。
+    別スレッドに逃がすことでリアルタイム受信を維持する。
+    """
     print_menu()
     while True:
-        cmd = input("コマンド> ").strip().lower()
+        cmd = (await asyncio.to_thread(input, "コマンド> ")).strip().lower()
 
         if cmd in CONDITION_MAP:
             cond = CONDITION_MAP[cmd]
@@ -139,7 +144,7 @@ async def pilot_mode():
         await asyncio.sleep(30)
         osc_client.send_message("/heartbeat/stop", 1)
         print("  → 評定してください（1=明らかに違う 〜 7=完全に自分の心拍）")
-        input("  次へ: Enter を押してください...")
+        await asyncio.to_thread(input, "  次へ: Enter を押してください...")
 
     print("パイロット実験モード終了")
 

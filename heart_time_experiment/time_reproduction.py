@@ -8,7 +8,7 @@ time_reproduction.py
 - SAQは事前に別途実施
 
 課題の流れ:
-  1. 慣れフェーズ（3分間）: Woojerで振動を当てながら待機
+  1. 慣れフェーズ（45秒間）: Woojerで振動を当てながら待機
   2. 練習試行（各時間2試行）
   3. 本試行（4秒・8秒・12秒 × 各N試行 × 4条件）
 
@@ -21,6 +21,7 @@ from psychopy.hardware.keyboard import Keyboard
 import random
 import csv
 import os
+import pyglet
 from datetime import datetime
 from pythonosc import udp_client
 
@@ -32,9 +33,9 @@ SC_PORT = 57055  # sclang に openUDPPort で固定した Python 用ポート
 TARGET_DURATIONS = [4.0, 8.0, 12.0]        # 目標時間（秒）
 PRACTICE_DURATIONS = [3.0, 6.0, 10.0]     # 練習用時間（本番と異なる値でノイズを防ぐ）
 TRIALS_PER_CELL = 3                        # 各条件×各時間の試行数
-HABITUATION_SEC = 60                       # 慣れフェーズ（60秒）
+HABITUATION_SEC = 45                       # 慣れフェーズ（45秒）
 INTER_TRIAL_INTERVAL = 2.0                 # 試行間インターバル（秒）
-CONDITION_BREAK_SEC = 180                  # 条件間休憩（3分）
+CONDITION_BREAK_SEC = 90                   # 条件間休憩（90秒、全員強制的に待機）
 
 # 条件設定
 CONDITIONS = [
@@ -89,10 +90,14 @@ def get_participant_info():
         core.quit()
 
 # ===== データ保存 =====
+# 実行時のカレントディレクトリに関わらず、常にこのスクリプトと同じ場所の
+# data/ フォルダに保存する（カレントディレクトリ依存だと保存先がバラバラになるため）
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
 def setup_data_file(participant_info):
     """データファイルのセットアップ"""
-    os.makedirs("data", exist_ok=True)
-    filename = f"data/sub-{participant_info['participant_id']}_{participant_info['date']}.csv"
+    os.makedirs(DATA_DIR, exist_ok=True)
+    filename = os.path.join(DATA_DIR, f"sub-{participant_info['participant_id']}_{participant_info['date']}.csv")
 
     with open(filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -129,6 +134,7 @@ def show_instruction(win, text, wait_key="space"):
     )
     instruction.draw()
     win.flip()
+    win.winHandle.activate()  # 他のウィンドウにフォーカスが移っていた場合に備えて取り直す
     event.waitKeys(keyList=[wait_key])
 
 def show_text_and_wait(win, text, duration):
@@ -143,9 +149,9 @@ def show_text_and_wait(win, text, duration):
     core.wait(duration)
 
 # ===== 慣れフェーズ =====
-def habituation_phase(win, condition_name, condition_instruction, duration=180):
+def habituation_phase(win, condition_name, condition_instruction, duration=HABITUATION_SEC):
     """
-    慣れフェーズ: 3分間振動を当てながら待機
+    慣れフェーズ: 振動を当てながら待機（デフォルトはHABITUATION_SEC秒）
     被験者は目を閉じて座っているだけ
     """
     # OSCで振動開始
@@ -176,6 +182,34 @@ def habituation_phase(win, condition_name, condition_instruction, duration=180):
         # ESCで強制終了
         if event.getKeys(["escape"]):
             send_osc("/heartbeat/stop")
+            core.quit()
+
+# ===== 条件間休憩 =====
+def break_phase(win, duration):
+    """
+    条件間休憩: duration秒間、全員が必ず休憩を取るよう強制的に待機させる
+    （スペースキーでは飛ばせない。ESCのみ強制終了可）
+    """
+    stim = visual.TextStim(
+        win, text="",
+        height=0.06, wrapWidth=1.7,
+        color="white"
+    )
+
+    timer = core.CountdownTimer(duration)
+    while timer.getTime() > 0:
+        remaining = int(timer.getTime()) + 1
+        stim.text = (
+            f"休憩してください。\n"
+            f"Please take a break.\n\n"
+            f"残り {remaining} 秒\n"
+            f"{remaining} seconds remaining"
+        )
+        stim.draw()
+        win.flip()
+
+        # ESCで強制終了
+        if event.getKeys(["escape"]):
             core.quit()
 
 # ===== 1試行 =====
@@ -212,6 +246,7 @@ def run_trial(win, target_duration):
     )
     reproduce_text.draw()
     win.flip()
+    win.winHandle.activate()  # 他のウィンドウにフォーカスが移っていた場合に備えて取り直す
 
     # --- 5. 再生区間の計測: press-and-hold ---
     # waitKeys(waitRelease=True) でキーを押してから離すまでの duration を取得する
@@ -236,7 +271,7 @@ def run_condition_block(win, condition, block_num, filename, participant_id,
     condition_label = condition["label"]
     condition_instruction = condition["instruction"]
 
-    # --- 慣れフェーズ（3分） ---
+    # --- 慣れフェーズ ---
     habituation_phase(win, condition_name, condition_instruction, HABITUATION_SEC)
 
     # --- 課題の教示 ---
@@ -318,12 +353,21 @@ def main():
     filename = setup_data_file(participant_info)
 
     # ウィンドウの作成
+    # 排他的フルスクリーン(fullscr=True)はWindowsでキーボードフォーカスが
+    # 外れてスペースキーが効かなくなることがあるため、
+    # 画面いっぱいに近いサイズの通常ウィンドウとして開く（Win/Mac共通）
+    screen = pyglet.canvas.get_display().get_default_screen()
+    margin = 40
+    win_size = [screen.width - margin, screen.height - margin]
     win = visual.Window(
-        size=[1280, 720],
-        fullscr=False,  # 本番はTrueに変更
+        size=win_size,
+        pos=[margin // 2, margin // 2],
+        fullscr=False,
         color="black",
         units="norm"
     )
+    # ダイアログを閉じた後にOSがキーボードフォーカスを渡さないことがあるため、明示的に要求する
+    win.winHandle.activate()
 
     # ===== 実験開始の教示 =====
     welcome_text = (
@@ -380,17 +424,9 @@ def main():
             filename, participant_id
         )
 
-        # ブロック間休憩（最後のブロック以外）
+        # ブロック間休憩（最後のブロック以外）: 全員CONDITION_BREAK_SEC秒、強制的に休憩
         if block_num < len(ordered_conditions) - 1:
-            break_text = (
-                f"休憩してください。\n"
-                f"Please take a break.\n\n"
-                f"次のブロックまで約3分お待ちください。\n"
-                f"The next block will begin in approximately 3 minutes.\n\n"
-                f"準備ができたらスペースキーを押してください。\n"
-                f"Press SPACE when you are ready."
-            )
-            show_instruction(win, break_text)
+            break_phase(win, CONDITION_BREAK_SEC)
 
     # ===== デブリーフィング =====
     debrief(win, filename)

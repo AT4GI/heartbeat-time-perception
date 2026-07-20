@@ -1,0 +1,12 @@
+# Experiment data / logs (kept local only, may contain participant info)
+data/
+experiment_data/
+heart_time_experiment/data/
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+
+# Local Claude Code settings
+.claude/settings.local.json

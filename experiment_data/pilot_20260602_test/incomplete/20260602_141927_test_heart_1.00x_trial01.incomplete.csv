@@ -1,7 +1,0 @@
-time_sec,subject_id,trial_num,condition,raw_bpm,smoothed_bpm,bpm_used_for_sound,smoothing_used,heart_interval_sec,heart_scale,stimulus_bpm,stimulus_interval_sec,send_sound_to_sc,output_mode,run_seconds,smoothing_alpha
-0.3865325450897217,test,trial01,heart_1.00x,69,69.0,69.0,False,0.8695652173913043,1.0,69.0,0.8695652173913043,True,both,150,0.15
-1.406240701675415,test,trial01,heart_1.00x,70,70.0,70.0,False,0.8571428571428571,1.0,70.0,0.8571428571428571,True,both,150,0.15
-2.368673801422119,test,trial01,heart_1.00x,70,70.0,70.0,False,0.8571428571428571,1.0,70.0,0.8571428571428571,True,both,150,0.15
-3.3890576362609863,test,trial01,heart_1.00x,70,70.0,70.0,False,0.8571428571428571,1.0,70.0,0.8571428571428571,True,both,150,0.15
-4.467666864395142,test,trial01,heart_1.00x,68,68.0,68.0,False,0.8823529411764706,1.0,68.0,0.8823529411764706,True,both,150,0.15
-5.428407192230225,test,trial01,heart_1.00x,66,66.0,66.0,False,0.9090909090909091,1.0,66.0,0.9090909090909091,True,both,150,0.15

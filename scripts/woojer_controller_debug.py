@@ -1,0 +1,239 @@
+"""
+woojer_controller_debug.py
+--------------------------
+woojer_controller.py のデバッグ用コピー。
+HW706 の BLE Notify の実際の間隔・flags・RR-Interval・BPM値をCSVログに記録し、
+「テンポが多少速く感じる」原因が HW706 側の取得・送信にあるかを調査するためのもの。
+挙動そのものは元ファイルと同じ（SCへの送信内容・タイミングは変更していない）。
+
+起動方法:
+  python woojer_controller_debug.py             # 通常モード（HW706 が必要）
+  python woojer_controller_debug.py --simulate  # シミュレーションモード（HW706 不要、固定BPM=72）
+
+依存:
+  pip install bleak python-osc
+"""
+
+import asyncio
+import struct
+import argparse
+import time
+import csv
+from datetime import datetime
+from bleak import BleakScanner, BleakClient
+from pythonosc import udp_client
+
+# ===== デバッグログ =====
+_log_path = f"hw706_debug_log_{datetime.now():%Y%m%d_%H%M%S}.csv"
+_log_file = open(_log_path, "w", newline="", encoding="utf-8")
+_log_writer = csv.writer(_log_file)
+_log_writer.writerow(["wall_clock", "notify_interval_sec", "flags_hex", "bpm", "rr_intervals_sec"])
+_last_notify_time = None
+
+# ===== 設定 =====
+SC_IP   = "127.0.0.1"
+SC_PORT = 57055          # sclang に openUDPPort で固定した Python 用ポート
+HW706_NAME      = "HW706"
+HEART_RATE_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
+
+osc_client  = udp_client.SimpleUDPClient(SC_IP, SC_PORT)
+current_bpm = 72.0   # HW706 からの最新生BPM（SC 側で倍率を適用）
+
+# ===== OSC 送信ユーティリティ =====
+
+def send_raw_bpm(bpm: float):
+    """生BPMをそのまま SC に送る（倍率適用は SC 側）"""
+    global current_bpm
+    current_bpm = bpm
+    osc_client.send_message("/heartbeat/bpm", float(bpm))
+    print(f"BPM送信: {bpm:.1f}")
+
+def send_condition(condition: str):
+    """SC 側の条件倍率テーブルを切り替える"""
+    osc_client.send_message("/heartbeat/condition", condition)
+    print(f"条件送信: {condition}")
+
+def send_start():
+    osc_client.send_message("/heartbeat/go", 1)
+    print("振動開始")
+
+def send_stop():
+    osc_client.send_message("/heartbeat/stop", 1)  # dummy arg（引数なしは SC 3.13 で未達）
+    print("振動停止")
+
+# ===== HW706 コールバック =====
+
+def heartrate_callback(sender, data: bytearray):
+    global _last_notify_time
+
+    now = time.perf_counter()
+    interval = (now - _last_notify_time) if _last_notify_time is not None else None
+    _last_notify_time = now
+
+    flags = data[0]
+    bpm_is_u16 = bool(flags & 0x01)
+    bpm = struct.unpack_from('<H', data, 1)[0] if bpm_is_u16 else data[1]
+
+    # RR-Interval（bit4, 0x10）が含まれていれば本当の拍-拍間隔(秒)を取り出す
+    rr_values = []
+    if flags & 0x10:
+        offset = 3 if bpm_is_u16 else 2
+        while offset + 1 < len(data):
+            rr = struct.unpack_from('<H', data, offset)[0] / 1024.0  # 1/1024秒単位 → 秒
+            rr_values.append(rr)
+            offset += 2
+
+    interval_str = f"{interval:.3f}" if interval is not None else ""
+    rr_str = ";".join(f"{rr:.3f}" for rr in rr_values)
+    _log_writer.writerow([f"{datetime.now():%H:%M:%S.%f}", interval_str, f"{flags:#04x}", bpm, rr_str])
+    _log_file.flush()
+
+    print(f"[debug] notify間隔={interval_str}s flags={flags:#04x} bpm={bpm} RR={rr_values}")
+
+    send_raw_bpm(float(bpm))
+
+# ===== BLE 検索 =====
+
+async def find_hw706():
+    print("HW706 を検索中...")
+    for device in await BleakScanner.discover(timeout=10.0):
+        if device.name and HW706_NAME in device.name:
+            print(f"発見: {device.name} ({device.address})")
+            return device.address
+    return None
+
+# ===== 共通メニュー =====
+
+def print_menu():
+    print("\n===== Woojer コントローラー =====")
+    print("  1: true_heartbeat（等倍）")
+    print("  2: fast_false（速い偽心拍）")
+    print("  3: slow_false（遅い偽心拍）")
+    print("  4: control（統制）")
+    print("  s: 振動停止")
+    print("  p: パイロット実験モード（ズレ幅テスト）")
+    print("  q: 終了")
+    print("=================================\n")
+
+CONDITION_MAP = {
+    "1": "true_heartbeat",
+    "2": "fast_false",
+    "3": "slow_false",
+    "4": "control",
+}
+
+async def interactive_menu(stop_event=None):
+    """共通のキー入力ループ（BLE 有無に関わらず共通）"""
+    print_menu()
+    while True:
+        cmd = (await asyncio.to_thread(input, "コマンド> ")).strip().lower()
+
+        if cmd in CONDITION_MAP:
+            cond = CONDITION_MAP[cmd]
+            send_condition(cond)  # SC側が条件受信時に自動で振動開始
+
+        elif cmd == "s":
+            send_stop()
+
+        elif cmd == "p":
+            await pilot_mode()
+
+        elif cmd == "q":
+            send_stop()
+            break
+
+        else:
+            print("不明なコマンドです")
+
+    if stop_event:
+        stop_event.set()
+
+# ===== パイロット実験モード =====
+
+async def pilot_mode():
+    """
+    5%〜25% のズレ幅を順番に提示するパイロット実験。
+    SC の /heartbeat/start に rate を直接送ることで条件倍率テーブルを迂回する。
+    """
+    print("\n=== パイロット実験モード ===")
+    print("各ズレ幅を 30 秒ずつ提示します")
+    print("被験者に「自分の心拍か？」を 7 段階で評定してもらってください\n")
+
+    steps = [
+        ("等倍（基準）", 1.00),
+        ("5%速い",      1.05), ("10%速い", 1.10),
+        ("15%速い",     1.15), ("20%速い", 1.20), ("25%速い", 1.25),
+        ("5%遅い",      0.95), ("10%遅い", 0.90),
+        ("15%遅い",     0.85), ("20%遅い", 0.80), ("25%遅い", 0.75),
+    ]
+
+    for label, mult in steps:
+        rate = (current_bpm * mult) / 60.0
+        osc_client.send_message("/heartbeat/rate", float(rate))
+        print(f"提示中: {label}  ({current_bpm * mult:.1f} BPM) - 30秒")
+        await asyncio.sleep(30)
+        osc_client.send_message("/heartbeat/stop", 1)
+        print("  → 評定してください（1=明らかに違う 〜 7=完全に自分の心拍）")
+        await asyncio.to_thread(input, "  次へ: Enter を押してください...")
+
+    print("パイロット実験モード終了")
+
+# ===== 通常モード（HW706 使用） =====
+
+async def run_with_hw706():
+    address = await find_hw706()
+    if address is None:
+        print("HW706 が見つかりません。--simulate で試してください。")
+        return
+
+    print(f"接続中: {address}")
+    async with BleakClient(address) as client:
+        print("接続完了")
+        await client.start_notify(HEART_RATE_UUID, heartrate_callback)
+        print("心拍データ受信開始")
+
+        stop_event = asyncio.Event()
+        await interactive_menu(stop_event)
+        await client.stop_notify(HEART_RATE_UUID)
+    print("切断")
+
+# ===== シミュレーションモード（HW706 不要） =====
+
+async def run_simulate():
+    """
+    固定 BPM=72 で送り続けるテストモード。
+    HW706 なしで Python → SC → Woojer のチェーンを確認できる。
+    """
+    print("=== シミュレーションモード（固定 BPM=72） ===")
+    print("BPM を 5 秒ごとに SC へ送り続けます（バックグラウンド）")
+
+    async def bpm_loop():
+        while True:
+            send_raw_bpm(72.0)
+            await asyncio.sleep(5.0)
+
+    bpm_task = asyncio.create_task(bpm_loop())
+    await interactive_menu()
+    bpm_task.cancel()
+
+# ===== エントリポイント =====
+
+async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--simulate", action="store_true",
+        help="HW706 なしのシミュレーションモード（固定BPM=72）"
+    )
+    args = parser.parse_args()
+
+    if args.simulate:
+        await run_simulate()
+    else:
+        await run_with_hw706()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    finally:
+        _log_file.close()
+        print(f"ログ出力先: {_log_path}")
