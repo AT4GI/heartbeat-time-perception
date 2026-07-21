@@ -36,17 +36,29 @@ SC_PORT = 57055  # sclang に openUDPPort で固定した Python 用ポート
 # 実験パラメータ
 TARGET_DURATIONS = [4.0, 8.0, 12.0]        # 目標時間（秒）
 PRACTICE_DURATIONS = [3.0, 6.0, 10.0]     # 練習用時間（本番と異なる値でノイズを防ぐ）
-TRIALS_PER_CELL = 3                        # 各条件×各時間の試行数
-HABITUATION_SEC = 45                       # 慣れフェーズ（45秒）
+TRIALS_PER_CELL = 2                        # 各条件×各時間の試行数
+HABITUATION_SEC = 60                       # 慣れフェーズ（60秒）
 INTER_TRIAL_INTERVAL = 2.0                 # 試行間インターバル（秒）
-CONDITION_BREAK_SEC = 90                   # 条件間休憩（90秒、全員強制的に待機）
+CONDITION_BREAK_SEC = 60                   # 休憩（60秒、ブロック2と3の間のみ、全員強制的に待機）
 
 # 条件設定
 CONDITIONS = [
     {"name": "true_heartbeat", "label": "条件A", "instruction": "これはあなたの心拍です"},
     {"name": "fast_false",     "label": "条件B", "instruction": "これはあなたの心拍です"},
     {"name": "slow_false",     "label": "条件C", "instruction": "これはあなたの心拍です"},
-    {"name": "control",        "label": "条件D", "instruction": "これは規則的な振動です"},
+    {"name": "no_vibration",   "label": "条件D", "instruction": "これは振動なしの区間です"},
+]
+
+# 4条件の提示順序パターン（カウンターバランス）。参加者番号に応じて選ぶ。
+COUNTERBALANCE_ORDERS = [
+    [0, 1, 2, 3],
+    [1, 2, 3, 0],
+    [2, 3, 0, 1],
+    [3, 0, 1, 2],
+    [0, 2, 1, 3],
+    [1, 3, 0, 2],
+    [2, 0, 3, 1],
+    [3, 1, 2, 0],
 ]
 
 # ===== OSCクライアント =====
@@ -151,10 +163,14 @@ def show_text_and_wait(win, text, duration):
 def habituation_phase(win, condition_name, condition_instruction, duration=HABITUATION_SEC):
     """
     慣れフェーズ: 振動を当てながら待機（デフォルトはHABITUATION_SEC秒）
-    被験者は目を閉じて座っているだけ
+    被験者は目を閉じて座っているだけ。
+    no_vibrationでは振動開始のOSCを送らない（振動なし条件のため）。
     """
-    # OSCで振動開始
-    send_osc("/heartbeat/condition", condition_name)  # SC側が自動で振動開始
+    is_no_vibration = condition_name == "no_vibration"
+
+    if not is_no_vibration:
+        # OSCで振動開始
+        send_osc("/heartbeat/condition", condition_name)  # SC側が自動で振動開始
 
     stim = visual.TextStim(
         win, text="",
@@ -166,15 +182,25 @@ def habituation_phase(win, condition_name, condition_instruction, duration=HABIT
     timer = core.CountdownTimer(duration)
     while timer.getTime() > 0:
         remaining = int(timer.getTime())
-        stim.text = (
-            f"これから{duration}秒間、振動を体験していただきます。\n"
-            f"You will experience vibration for {duration} seconds.\n\n"
-            f"【{condition_instruction}】\n\n"
-            f"目を閉じて、リラックスして座っていてください。\n"
-            f"Please close your eyes and sit comfortably.\n\n"
-            f"何もする必要はありません。\n"
-            f"You do not need to do anything."
-        )
+        if is_no_vibration:
+            stim.text = (
+                f"これから{duration}秒間、振動はありません。\n"
+                f"There will be no vibration for the next {duration} seconds.\n\n"
+                f"目を閉じて、リラックスして座っていてください。\n"
+                f"Please close your eyes and sit comfortably.\n\n"
+                f"何もする必要はありません。\n"
+                f"You do not need to do anything."
+            )
+        else:
+            stim.text = (
+                f"これから{duration}秒間、振動を体験していただきます。\n"
+                f"You will experience vibration for {duration} seconds.\n\n"
+                f"【{condition_instruction}】\n\n"
+                f"目を閉じて、リラックスして座っていてください。\n"
+                f"Please close your eyes and sit comfortably.\n\n"
+                f"何もする必要はありません。\n"
+                f"You do not need to do anything."
+            )
         stim.draw()
         win.flip()
 
@@ -190,20 +216,19 @@ def break_phase(win, duration):
     （スペースキーでは飛ばせない。ESCのみ強制終了可）
     """
     stim = visual.TextStim(
-        win, text="",
+        win,
+        text=(
+            "休憩です。1分間お待ちください。\n"
+            "Please take a break for 1 minute.\n\n"
+            "時間が経つと自動的に次のブロックに進みます。\n"
+            "It will automatically continue to the next block after this time."
+        ),
         height=0.06, wrapWidth=1.7,
         color="white"
     )
 
     timer = core.CountdownTimer(duration)
     while timer.getTime() > 0:
-        remaining = int(timer.getTime()) + 1
-        stim.text = (
-            f"休憩してください。\n"
-            f"Please take a break.\n\n"
-            f"残り {remaining} 秒\n"
-            f"{remaining} seconds remaining"
-        )
         stim.draw()
         win.flip()
 
@@ -331,9 +356,9 @@ def main():
     # 参加者番号の自動採番
     participant_number = get_next_participant_number(DATA_DIR)
 
-    # 条件提示順序をランダムに決定
-    ordered_conditions = CONDITIONS.copy()
-    random.shuffle(ordered_conditions)
+    # 条件提示順序をカウンターバランスで決定（参加者番号に応じて8パターンを巡回）
+    order_idx = (participant_number - 1) % len(COUNTERBALANCE_ORDERS)
+    ordered_conditions = [CONDITIONS[i] for i in COUNTERBALANCE_ORDERS[order_idx]]
 
     print(f"参加者: {participant_name}（{participant_number}人目）")
     print(f"条件順序: {[c['name'] for c in ordered_conditions]}")
@@ -417,12 +442,13 @@ def main():
             filename, participant_name
         )
 
-        # ブロック間休憩（最後のブロック以外）: 全員CONDITION_BREAK_SEC秒、強制的に休憩
-        if block_num < len(ordered_conditions) - 1:
+        # ブロック間休憩: 2番目と3番目のブロックの間のみ、全員CONDITION_BREAK_SEC秒、強制的に休憩
+        # （条件名ではなく、カウンターバランス後のブロック位置基準。0始まりでblock_num==1）
+        if block_num == 1:
             break_phase(win, CONDITION_BREAK_SEC)
 
     # ===== デブリーフィング =====
-    run_debrief(win, participant_info, DATA_DIR)
+    run_debrief(win, participant_info, DATA_DIR, ordered_conditions)
 
     # 終了
     win.close()
