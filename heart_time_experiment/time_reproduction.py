@@ -8,6 +8,7 @@ time_reproduction.py
 - SAQは事前に別途実施
 
 課題の流れ:
+  0. スクリーニング質問紙（安全確認・除外基準チェック、screening.py）
   1. 慣れフェーズ（45秒間）: Woojerで振動を当てながら待機
   2. 練習試行（各時間2試行）
   3. 本試行（4秒・8秒・12秒 × 各N試行 × 4条件）
@@ -24,6 +25,9 @@ import os
 import pyglet
 from datetime import datetime
 from pythonosc import udp_client
+
+from screening import run_screening
+from debrief import run_debrief
 
 # ===== 設定 =====
 SC_IP = "127.0.0.1"
@@ -45,19 +49,6 @@ CONDITIONS = [
     {"name": "control",        "label": "条件D", "instruction": "これは規則的な振動です"},
 ]
 
-# カウンターバランス（4条件の順番パターン）
-# 被験者番号に応じて順番を割り当てる
-COUNTERBALANCE_ORDERS = [
-    [0, 1, 2, 3],
-    [1, 2, 3, 0],
-    [2, 3, 0, 1],
-    [3, 0, 1, 2],
-    [0, 2, 1, 3],
-    [1, 3, 0, 2],
-    [2, 0, 3, 1],
-    [3, 1, 2, 0],
-]
-
 # ===== OSCクライアント =====
 osc_client = udp_client.SimpleUDPClient(SC_IP, SC_PORT)
 
@@ -67,23 +58,21 @@ def send_osc(address, value=1):
 
 # ===== 参加者情報の取得 =====
 def get_participant_info():
-    """GUIダイアログで参加者情報を取得"""
-    dialog = gui.Dlg(title="実験情報")
-    dialog.addText("参加者情報を入力してください")
-    dialog.addField("参加者ID:", "")
-    dialog.addField("年齢:", "")
-    dialog.addField("性別 (M/F/Other):", "")
-    dialog.addField("利き手 (R/L):", "R")
-    dialog.addField("音楽経験 (なし/あり):", "なし")
+    """GUIダイアログで参加者情報を取得（日本語・英語併記）"""
+    dialog = gui.Dlg(title="実験情報 / Participant Information")
+    dialog.addText("参加者情報を入力してください / Please enter participant information")
+    dialog.addField("名前 / Name:", "")
+    dialog.addField("年齢 / Age:", "")
+    dialog.addField("性別 / Gender:", choices=["Male / 男性", "Female / 女性", "Other / その他"])
+    dialog.addField("利き手 / Handedness:", choices=["Right / 右", "Left / 左"])
 
     info = dialog.show()
     if dialog.OK:
         return {
-            "participant_id": info[0],
+            "name": info[0],
             "age": info[1],
             "gender": info[2],
             "handedness": info[3],
-            "music_experience": info[4],
             "date": datetime.now().strftime("%Y%m%d_%H%M%S"),
         }
     else:
@@ -94,22 +83,32 @@ def get_participant_info():
 # data/ フォルダに保存する（カレントディレクトリ依存だと保存先がバラバラになるため）
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
-def setup_data_file(participant_info):
+def get_next_participant_number(data_dir):
+    """既存データ（sub-*.csv）の件数から次の参加者番号を自動採番する。"""
+    if not os.path.isdir(data_dir):
+        return 1
+    existing = [f for f in os.listdir(data_dir) if f.startswith("sub-") and f.endswith(".csv")]
+    return len(existing) + 1
+
+def setup_data_file(participant_info, participant_number):
     """データファイルのセットアップ"""
     os.makedirs(DATA_DIR, exist_ok=True)
-    filename = os.path.join(DATA_DIR, f"sub-{participant_info['participant_id']}_{participant_info['date']}.csv")
+    filename = os.path.join(
+        DATA_DIR,
+        f"sub-{participant_number:02d}_{participant_info['name']}_{participant_info['date']}.csv"
+    )
 
     with open(filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "participant_id", "condition", "target_duration",
+            "participant_name", "condition", "target_duration",
             "reproduced_duration", "error", "relative_error",
             "trial_number", "block_number", "is_practice",
             "timestamp"
         ])
     return filename
 
-def save_trial(filename, participant_id, condition, target, reproduced,
+def save_trial(filename, participant_name, condition, target, reproduced,
                trial_num, block_num, is_practice):
     """1試行のデータを保存"""
     error = reproduced - target
@@ -118,7 +117,7 @@ def save_trial(filename, participant_id, condition, target, reproduced,
     with open(filename, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
-            participant_id, condition, target,
+            participant_name, condition, target,
             reproduced, error, relative_error,
             trial_num, block_num, is_practice,
             datetime.now().strftime("%Y%m%d_%H%M%S.%f")
@@ -241,8 +240,15 @@ def run_trial(win, target_duration):
     # --- 4. 再生の教示 ---
     reproduce_text = visual.TextStim(
         win,
-        text="スペースキーを押している間が回答です\nHold SPACE for the same duration\n\n同じ長さになったら離してください\nRelease when done",
-        height=0.055, color="yellow"
+        text=(
+            "今、スペースキーを押してください（押すタイミングは自由です）\n"
+            "Press and hold SPACE now (you may start whenever you like)\n\n"
+            "丸が表示されていたのと同じ長さになったら離してください\n"
+            "Release it once you have held it for the same duration as the circle\n\n"
+            "（押してから離すまでの長さが回答になります）\n"
+            "(The length of time you hold it down is your answer)"
+        ),
+        height=0.05, color="yellow"
     )
     reproduce_text.draw()
     win.flip()
@@ -262,7 +268,7 @@ def run_trial(win, target_duration):
     return reproduced_duration
 
 # ===== 条件ブロック =====
-def run_condition_block(win, condition, block_num, filename, participant_id,
+def run_condition_block(win, condition, block_num, filename, participant_name,
                         is_practice=False):
     """
     1つの条件ブロックを実行する
@@ -277,10 +283,14 @@ def run_condition_block(win, condition, block_num, filename, participant_id,
     # --- 課題の教示 ---
     task_instruction = (
         "【時間再生課題 / Duration Reproduction Task】\n\n"
-        "画面に白い丸が表示されている間の時間を覚えてください。\n"
-        "Remember the duration while a white circle is shown.\n\n"
-        "丸が消えたら、スペースキーを押している時間で同じ長さを再現してください。\n"
-        "When the circle disappears, hold SPACE for the same duration.\n\n"
+        "白い丸（●）が表示されていた時間の長さを、スペースキーを押す時間で再現する課題です。\n"
+        "This task asks you to reproduce, by holding down SPACE, the length of time a white circle (●) was shown.\n\n"
+        "① 画面に白い丸が表示されます。表示されている時間の長さを覚えてください。\n"
+        "① A white circle will appear. Remember how long it stays on screen.\n\n"
+        "② 丸が消えたらスペースキーを押してください（押すタイミングは自由です）。\n"
+        "② When the circle disappears, press and hold SPACE (start whenever you like).\n\n"
+        "③ ①で覚えた長さと同じだけ押し続けたら、離してください。\n"
+        "③ Release SPACE once you have held it for the same length of time as in step ①.\n\n"
         "数を数えないようにしてください。\n"
         "Please do not count seconds.\n\n"
         "準備ができたらスペースキーを押してください。\n"
@@ -300,7 +310,7 @@ def run_condition_block(win, condition, block_num, filename, participant_id,
         # データ保存
         if not is_practice:
             save_trial(
-                filename, participant_id, condition_name,
+                filename, participant_name, condition_name,
                 target, reproduced, trial_num + 1, block_num, is_practice
             )
 
@@ -312,45 +322,24 @@ def run_condition_block(win, condition, block_num, filename, participant_id,
 
     return True
 
-# ===== デブリーフィング =====
-def debrief(win, filename):
-    """実験後のデブリーフィング"""
-    debrief_text = (
-        "課題は以上で終わりです。お疲れ様でした。\n"
-        "The task is complete. Thank you for your participation.\n\n"
-        "いくつか確認させてください。\n"
-        "Please answer the following questions to the experimenter.\n\n"
-        "1. 課題中に秒数を数えましたか？\n"
-        "   Did you count seconds during the task?\n\n"
-        "2. 振動が「自分の心拍」だと感じましたか？\n"
-        "   Did the vibration feel like your own heartbeat?\n\n"
-        "3. 振動に違和感を感じた場面はありましたか？\n"
-        "   Was there any moment the vibration felt unnatural?\n\n"
-        "スペースキーで終了します。\n"
-        "Press SPACE to finish."
-    )
-    show_instruction(win, debrief_text)
-
 # ===== メイン =====
 def main():
     # 参加者情報取得
     participant_info = get_participant_info()
-    participant_id = participant_info["participant_id"]
+    participant_name = participant_info["name"]
 
-    # カウンターバランスの決定
-    # 参加者IDの数字部分を使って条件順序を決定
-    try:
-        order_idx = int(participant_id) % len(COUNTERBALANCE_ORDERS)
-    except ValueError:
-        order_idx = 0
-    condition_order = COUNTERBALANCE_ORDERS[order_idx]
-    ordered_conditions = [CONDITIONS[i] for i in condition_order]
+    # 参加者番号の自動採番
+    participant_number = get_next_participant_number(DATA_DIR)
 
-    print(f"参加者: {participant_id}")
+    # 条件提示順序をランダムに決定
+    ordered_conditions = CONDITIONS.copy()
+    random.shuffle(ordered_conditions)
+
+    print(f"参加者: {participant_name}（{participant_number}人目）")
     print(f"条件順序: {[c['name'] for c in ordered_conditions]}")
 
     # データファイルのセットアップ
-    filename = setup_data_file(participant_info)
+    filename = setup_data_file(participant_info, participant_number)
 
     # ウィンドウの作成
     # 排他的フルスクリーン(fullscr=True)はWindowsでキーボードフォーカスが
@@ -369,6 +358,10 @@ def main():
     # ダイアログを閉じた後にOSがキーボードフォーカスを渡さないことがあるため、明示的に要求する
     win.winHandle.activate()
 
+    # ===== スクリーニング質問紙（安全確認・除外基準チェック） =====
+    # 振動デバイスを胸に装着する前に実施する
+    run_screening(win, participant_info, DATA_DIR)
+
     # ===== 実験開始の教示 =====
     welcome_text = (
         "実験にご協力いただきありがとうございます。\n"
@@ -377,6 +370,8 @@ def main():
         "You will participate in a study on time perception.\n\n"
         "実験中は胸に振動デバイスを装着していただきます。\n"
         "A vibration device will be attached to your chest.\n\n"
+        "振動により不快感を感じた場合は、いつでも申告して実験を中断できます。\n"
+        "If you feel any discomfort from the vibration, you may report it and stop the experiment at any time.\n\n"
         "詳しい説明は実験者から行います。\n"
         "The experimenter will provide detailed instructions.\n\n"
         "準備ができたらスペースキーを押してください。\n"
@@ -388,10 +383,8 @@ def main():
     practice_text = (
         "まず練習を行います。\n"
         "Let's start with practice trials.\n\n"
-        "画面に白い丸が表示されている間の時間を覚えて、\n"
-        "スペースキーを押している時間で再現してください。\n"
-        "Remember the duration while a white circle is shown,\n"
-        "then hold SPACE for the same duration.\n\n"
+        "白い丸が表示されていた時間の長さを、スペースキーを押す時間で再現してください。\n"
+        "Reproduce, by holding down SPACE, the length of time a white circle was shown.\n\n"
         "秒数を数えないようにしてください。\n"
         "Please do not count seconds.\n\n"
         "準備ができたらスペースキーを押してください。\n"
@@ -421,7 +414,7 @@ def main():
         # 条件ブロックの実行
         run_condition_block(
             win, condition, block_num + 1,
-            filename, participant_id
+            filename, participant_name
         )
 
         # ブロック間休憩（最後のブロック以外）: 全員CONDITION_BREAK_SEC秒、強制的に休憩
@@ -429,7 +422,7 @@ def main():
             break_phase(win, CONDITION_BREAK_SEC)
 
     # ===== デブリーフィング =====
-    debrief(win, filename)
+    run_debrief(win, participant_info, DATA_DIR)
 
     # 終了
     win.close()
