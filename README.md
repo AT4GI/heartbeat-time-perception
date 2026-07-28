@@ -14,7 +14,8 @@ heartbeat-time-perception/
 ├── scripts/
 │   └── woojer_controller.py      # HW706→OSC→SuperCollider制御
 ├── heart_time_experiment/
-│   └── time_reproduction.py      # PsychoPy時間再生課題
+│   ├── time_reproduction.py            # PsychoPy時間再生課題（短時間版、各セル2試行）
+│   └── time_reproduction_precision.py  # 同上・精度重視版（各セル3試行、時間に余裕のある参加者向け）
 └── README.md
 ```
 
@@ -47,8 +48,16 @@ python scripts/woojer_controller.py
 ```
 
 ### 4. 実験を起動
-```bash
-python heart_time_experiment/time_reproduction.py
+`python`コマンドがpsychopy未インストールの環境を指している場合があるため、
+PsychoPy本体に同梱されたPythonを明示して実行する（PowerShell）
+```powershell
+& "C:\Program Files\PsychoPy\python.exe" heart_time_experiment\time_reproduction.py
+```
+
+参加者が十分な時間を確保できる場合は、各セル3試行の精度重視版を代わりに起動する
+（採番・カウンターバランスは短時間版と独立しており、どちらを使うかは実験者が判断する）
+```powershell
+& "C:\Program Files\PsychoPy\python.exe" heart_time_experiment\time_reproduction_precision.py
 ```
 
 ## 実験条件
