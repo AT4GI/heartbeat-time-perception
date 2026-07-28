@@ -7,8 +7,9 @@ debrief.py
 
 no_vibration条件の追加により、心拍らしさの評定（HB1〜HB4）を新設した。
 条件名（true_heartbeat等）は参加者に開示せず、体験した順番（1つ目〜4つ目）
-でのみ尋ねる。4問すべて同じ形式で聞くことで、no_vibrationのブロックだけ
-質問が異質にならないようにし、ブラインドを保つ。
+でのみ尋ねる。ただしno_vibrationのブロックは振動そのものがないため
+「心拍だと感じたか」を尋ねる意味がなく、そのブロックだけは評定を求めず
+心拍なしセクションとして扱う（回答させない）。
 保存時にその参加者の実際の条件順序（ordered_conditions）と突き合わせて、
 block_position・condition_nameの両方をCSVに記録する。
 """
@@ -39,12 +40,19 @@ HEARTBEAT_RATING_CHOICES = [
     "5 - とてもそう思う / Very much",
 ]
 
+# no_vibrationブロックは評定を求めない（回答欄に記録するラベル）
+NO_VIBRATION_RESPONSE_JP = "－（心拍なしセクションのため質問なし）"
+NO_VIBRATION_RESPONSE_EN = "N/A (no-vibration section, not asked)"
 
-def _heartbeat_rating_items():
-    """4ブロックそれぞれについて、体験した順番（条件名は開示しない）で
-    心拍らしさを尋ねる項目を作る。"""
+
+def _heartbeat_rating_items(ordered_conditions):
+    """4ブロックのうち、no_vibration以外の3ブロックについて、体験した順番
+    （条件名は開示しない）で心拍らしさを尋ねる項目を作る。
+    no_vibrationのブロックは振動自体がないため評定を求めない。"""
     items = []
     for position in range(1, 5):
+        if ordered_conditions[position - 1]["name"] == "no_vibration":
+            continue
         item_id = f"HB{position}"
         jp = f"{ORDINAL_JP[position]}に体験したブロックの振動を、どれくらい自分の心拍だと感じましたか？"
         en = (
@@ -55,12 +63,13 @@ def _heartbeat_rating_items():
     return items
 
 
-def _ask_all_debrief_questions():
-    """全質問（Q1〜Q3のYes/No + HB1〜HB4の5段階評定）を1つのダイアログにまとめて尋ねる。"""
+def _ask_all_debrief_questions(ordered_conditions):
+    """全質問（Q1〜Q3のYes/No + no_vibration以外のブロックの5段階評定）を
+    1つのダイアログにまとめて尋ねる。"""
     dlg = gui.Dlg(title="デブリーフィング / Debrief")
     for item_id, jp, en in DEBRIEF_ITEMS:
         dlg.addField(f"{item_id}. {jp}\n{en}", choices=[NO_LABEL, YES_LABEL])
-    for item_id, jp, en in _heartbeat_rating_items():
+    for item_id, jp, en in _heartbeat_rating_items(ordered_conditions):
         dlg.addField(f"{item_id}. {jp}\n{en}", choices=HEARTBEAT_RATING_CHOICES)
 
     info = dlg.show()
@@ -93,8 +102,8 @@ def run_debrief(win, participant_info, data_dir, ordered_conditions):
     )
     show_message(win, intro)
 
-    answers = _ask_all_debrief_questions()
-    all_items = DEBRIEF_ITEMS + _heartbeat_rating_items()
+    answers = _ask_all_debrief_questions(ordered_conditions)
+    all_items = DEBRIEF_ITEMS + _heartbeat_rating_items(ordered_conditions)
 
     responses = {}
     for (item_id, jp, en), value in zip(all_items, answers):
@@ -143,12 +152,23 @@ def _save_debrief(participant_info, responses, ordered_conditions, data_dir):
                 jp, en, response, "", "",
                 timestamp
             ])
-        for item_id, jp, en in _heartbeat_rating_items():
-            position = int(item_id[2:])
+        for position in range(1, 5):
+            item_id = f"HB{position}"
             condition_name = ordered_conditions[position - 1]["name"]
+            if condition_name == "no_vibration":
+                jp = f"{ORDINAL_JP[position]}に体験したブロック（心拍なしセクション）"
+                en = f"Block experienced {ORDINAL_EN[position]} (no-vibration section)"
+                response = f"{NO_VIBRATION_RESPONSE_JP} / {NO_VIBRATION_RESPONSE_EN}"
+            else:
+                jp = f"{ORDINAL_JP[position]}に体験したブロックの振動を、どれくらい自分の心拍だと感じましたか？"
+                en = (
+                    f"How much did the vibration in the block you experienced "
+                    f"{ORDINAL_EN[position]} feel like your own heartbeat?"
+                )
+                response = responses[item_id]
             writer.writerow([
                 participant_info["name"], item_id,
-                jp, en, responses[item_id], position, condition_name,
+                jp, en, response, position, condition_name,
                 timestamp
             ])
 
