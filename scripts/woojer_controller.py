@@ -60,11 +60,16 @@ def heartrate_callback(sender, data: bytearray):
 # ===== BLE 検索 =====
 
 async def find_hw706():
+    """
+    デバイスオブジェクトそのものを返す（addressの文字列だけを渡すと、
+    Windows(WinRT)ではスキャン直後でもBleakDeviceNotFoundErrorになることがあるため、
+    BleakClientにはdeviceオブジェクトを渡す方が安定する）。
+    """
     print("HW706 を検索中...")
     for device in await BleakScanner.discover(timeout=10.0):
         if device.name and HW706_NAME in device.name:
             print(f"発見: {device.name} ({device.address})")
-            return device.address
+            return device
     return None
 
 # ===== 共通メニュー =====
@@ -150,14 +155,32 @@ async def pilot_mode():
 
 # ===== 通常モード（HW706 使用） =====
 
+async def connect_with_retry(device, max_attempts=3, retry_wait=2.0):
+    """
+    Windows(WinRT)のBleakは、スキャン直後の接続でも
+    BleakDeviceNotFoundError（内部キャッシュ未反映）が起きることがあるため、
+    数回リトライする。
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            client = BleakClient(device)
+            await client.connect()
+            return client
+        except Exception as e:
+            print(f"接続失敗（{attempt}/{max_attempts}）: {e}")
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(retry_wait)
+
 async def run_with_hw706():
-    address = await find_hw706()
-    if address is None:
+    device = await find_hw706()
+    if device is None:
         print("HW706 が見つかりません。--simulate で試してください。")
         return
 
-    print(f"接続中: {address}")
-    async with BleakClient(address) as client:
+    print(f"接続中: {device.address}")
+    client = await connect_with_retry(device)
+    try:
         print("接続完了")
         await client.start_notify(HEART_RATE_UUID, heartrate_callback)
         print("心拍データ受信開始")
@@ -165,6 +188,8 @@ async def run_with_hw706():
         stop_event = asyncio.Event()
         await interactive_menu(stop_event)
         await client.stop_notify(HEART_RATE_UUID)
+    finally:
+        await client.disconnect()
     print("切断")
 
 # ===== シミュレーションモード（HW706 不要） =====
