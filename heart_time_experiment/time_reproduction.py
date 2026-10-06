@@ -83,6 +83,7 @@ def get_participant_info():
     dialog = gui.Dlg(title="実験情報 / Participant Information")
     dialog.addText("参加者情報を入力してください / Please enter participant information")
     dialog.addField("版 / Protocol（実験者が選択）:", choices=[p["label"] for p in PROTOCOLS.values()])
+    dialog.addField("記録先 / Save to（実験者が選択）:", choices=[t["label"] for t in SAVE_TARGETS.values()])
     dialog.addField("名前 / Name:", "")
     dialog.addField("年齢 / Age:", "")
     dialog.addField("性別 / Gender:", choices=["Male / 男性", "Female / 女性", "Other / その他"])
@@ -91,12 +92,14 @@ def get_participant_info():
     info = dialog.show()
     if dialog.OK:
         protocol = next(k for k, p in PROTOCOLS.items() if p["label"] == info[0])
+        data_dir = next(t["dir"] for t in SAVE_TARGETS.values() if t["label"] == info[1])
         return {
             "protocol": protocol,
-            "name": info[1],
-            "age": info[2],
-            "gender": info[3],
-            "handedness": info[4],
+            "data_dir": data_dir,
+            "name": info[2],
+            "age": info[3],
+            "gender": info[4],
+            "handedness": info[5],
             # screening.py/debrief.pyのファイル名もこの"date"から組み立てられるため、
             # ここで版のサフィックスを付ければ全CSVのファイル名に反映される
             "date": datetime.now().strftime("%Y%m%d_%H%M%S") + PROTOCOLS[protocol]["file_suffix"],
@@ -108,6 +111,13 @@ def get_participant_info():
 # 実行時のカレントディレクトリに関わらず、常にこのスクリプトと同じ場所の
 # data/ フォルダに保存する（カレントディレクトリ依存だと保存先がバラバラになるため）
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# テスト実行（動作確認・練習）の記録先。本番の data/ とは別にすることで、
+# 本番の参加者番号の採番・条件順序の均等化・分析（analysis/analyze.py は data/ のみ読む）に混ざらない。
+TEST_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_test")
+SAVE_TARGETS = {
+    "main": {"label": "本番 / Main（data/）", "dir": DATA_DIR},
+    "test": {"label": "テスト / Test（data_test/、本番データに混ざらない）", "dir": TEST_DATA_DIR},
+}
 
 def get_next_participant_number(data_dir, protocol):
     """既存データ（同じ版の sub-NN_*.csv）の最大番号+1を次の参加者番号として自動採番する。
@@ -145,11 +155,11 @@ def choose_counterbalance_order(data_dir):
                 counts[COUNTERBALANCE_ORDERS.index(order)] += 1
     return counts.index(min(counts))
 
-def setup_data_file(participant_info, participant_number):
+def setup_data_file(participant_info, participant_number, data_dir):
     """データファイルのセットアップ"""
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
     filename = os.path.join(
-        DATA_DIR,
+        data_dir,
         f"sub-{participant_number:02d}_{participant_info['name']}_{participant_info['date']}.csv"
     )
 
@@ -396,20 +406,24 @@ def main():
     participant_info = get_participant_info()
     participant_name = participant_info["name"]
     protocol = participant_info["protocol"]
+    # 記録先（本番は data/、テストは data_test/）。採番・順序決定・全CSVの保存先がすべてここになる
+    data_dir = participant_info["data_dir"]
 
     # 参加者番号の自動採番（版ごとに別々）
-    participant_number = get_next_participant_number(DATA_DIR, protocol)
+    participant_number = get_next_participant_number(data_dir, protocol)
 
     # 条件提示順序をカウンターバランスで決定（完了者の中で最も使われていない順序を選ぶ）
-    order_idx = choose_counterbalance_order(DATA_DIR)
+    order_idx = choose_counterbalance_order(data_dir)
     ordered_conditions = [CONDITIONS[i] for i in COUNTERBALANCE_ORDERS[order_idx]]
 
+    if data_dir == TEST_DATA_DIR:
+        print("*** テスト実行：記録は data_test/ に保存され、本番データには混ざりません ***")
     print(f"版: {PROTOCOLS[protocol]['label']}")
     print(f"参加者: {participant_name}（{participant_number}人目）")
     print(f"条件順序: {[c['name'] for c in ordered_conditions]}")
 
     # データファイルのセットアップ
-    filename = setup_data_file(participant_info, participant_number)
+    filename = setup_data_file(participant_info, participant_number, data_dir)
 
     # ウィンドウの作成
     # 排他的フルスクリーン(fullscr=True)はWindowsでキーボードフォーカスが
@@ -430,7 +444,7 @@ def main():
 
     # ===== スクリーニング質問紙（安全確認・除外基準チェック） =====
     # 振動デバイスを胸に装着する前に実施する
-    run_screening(win, participant_info, DATA_DIR)
+    run_screening(win, participant_info, data_dir)
 
     # ===== 実験開始の教示 =====
     welcome_text = (
@@ -493,7 +507,7 @@ def main():
             break_phase(win, CONDITION_BREAK_SEC)
 
     # ===== デブリーフィング =====
-    run_debrief(win, participant_info, DATA_DIR, ordered_conditions)
+    run_debrief(win, participant_info, data_dir, ordered_conditions)
 
     # 終了
     win.close()
