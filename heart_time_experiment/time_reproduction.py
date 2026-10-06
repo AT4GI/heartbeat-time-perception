@@ -52,10 +52,10 @@ CONDITION_BREAK_SEC = 60                   # 休憩（60秒、ブロック2と3�
 
 # 条件設定
 CONDITIONS = [
-    {"name": "true_heartbeat", "label": "条件A", "instruction": "これはあなたの心拍です"},
-    {"name": "fast_false",     "label": "条件B", "instruction": "これはあなたの心拍です"},
-    {"name": "slow_false",     "label": "条件C", "instruction": "これはあなたの心拍です"},
-    {"name": "no_vibration",   "label": "条件D", "instruction": "これは振動なしの区間です"},
+    {"name": "true_heartbeat", "label": "条件A", "instruction": "これはあなたの心拍です / This is your heartbeat"},
+    {"name": "fast_false",     "label": "条件B", "instruction": "これはあなたの心拍です / This is your heartbeat"},
+    {"name": "slow_false",     "label": "条件C", "instruction": "これはあなたの心拍です / This is your heartbeat"},
+    {"name": "no_vibration",   "label": "条件D", "instruction": "これは振動なしの区間です / This is a section without vibration"},
 ]
 
 # 4条件の提示順序パターン（カウンターバランス）。完了者の中で使用回数が最も少ないものを選ぶ。
