@@ -76,6 +76,17 @@ PsychoPy本体に同梱されたPythonを明示して実行する（PowerShell�
 `woojer_controller.py` を起動してコマンド `p` を入力すると、
 5%〜25%のズレ幅を順番に提示するパイロットモードが起動する。
 
+## 分析（第4章）
+
+`analysis/analyze.py` が論文草稿3.8節の分析計画（線形混合効果モデル・操作チェック・感度分析など）を実行し、
+`analysis/output/` にレポート（report.md）・図・集計CSVを出力する（出力は.gitignore対象、参加者名は出さずS01/P01形式のIDのみ）。
+
+```powershell
+pip install -r analysis/requirements.txt
+python analysis/analyze.py --blind   # 条件ラベルをシャッフルして動作確認（結果は本当の条件差ではない）
+python analysis/analyze.py           # 本番（完了者が最終N=20名に達するまでは実行できない）
+```
+
 ## 注意事項
 
 - ズレ幅（fast_false/slow_false の倍率）はパイロット実験で確定してから
