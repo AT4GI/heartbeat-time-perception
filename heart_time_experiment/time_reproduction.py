@@ -6,10 +6,11 @@ time_reproduction.py
 - 被験者がボタンを押している時間を記録
 - Woojerは別プロセス（woojer_controller.py）で制御
 - SAQは事前に別途実施
+- 版（短時間版／精度重視版）は参加者情報ダイアログで選ぶ（PROTOCOLS参照）
 
 課題の流れ:
   0. スクリーニング質問紙（安全確認・除外基準チェック、screening.py）
-  1. 慣れフェーズ（45秒間）: Woojerで振動を当てながら待機
+  1. 慣れフェーズ（60秒間）: Woojerで振動を当てながら待機
   2. 練習試行（各時間2試行）
   3. 本試行（4秒・8秒・12秒 × 各N試行 × 4条件）
 
@@ -37,7 +38,14 @@ SC_PORT = 57055  # sclang に openUDPPort で固定した Python 用ポート
 # 実験パラメータ
 TARGET_DURATIONS = [4.0, 8.0, 12.0]        # 目標時間（秒）
 PRACTICE_DURATIONS = [3.0, 6.0, 10.0]     # 練習用時間（本番と異なる値でノイズを防ぐ）
-TRIALS_PER_CELL = 2                        # 各条件×各時間の試行数
+
+# 版の設定。参加者情報ダイアログで実験者が選ぶ。
+# 違いは各条件×各時間の試行数のみ（条件・時間長・休憩・慣れフェーズは共通なので、両版のデータはプールして分析できる）。
+# file_suffix は sub-/screening-/debrief- すべてのファイル名に付き、採番も版ごとに別々になる。
+PROTOCOLS = {
+    "short":     {"label": "短時間版 / Short（各セル2試行 / 2 trials per cell）",       "trials_per_cell": 2, "file_suffix": ""},
+    "precision": {"label": "精度重視版 / Precision（各セル3試行 / 3 trials per cell）", "trials_per_cell": 3, "file_suffix": "_precision"},
+}
 HABITUATION_SEC = 60                       # 慣れフェーズ（60秒）
 INTER_TRIAL_INTERVAL = 2.0                 # 試行間インターバル（秒）
 CONDITION_BREAK_SEC = 60                   # 休憩（60秒、ブロック2と3の間のみ、全員強制的に待機）
@@ -74,6 +82,7 @@ def get_participant_info():
     """GUIダイアログで参加者情報を取得（日本語・英語併記）"""
     dialog = gui.Dlg(title="実験情報 / Participant Information")
     dialog.addText("参加者情報を入力してください / Please enter participant information")
+    dialog.addField("版 / Protocol（実験者が選択）:", choices=[p["label"] for p in PROTOCOLS.values()])
     dialog.addField("名前 / Name:", "")
     dialog.addField("年齢 / Age:", "")
     dialog.addField("性別 / Gender:", choices=["Male / 男性", "Female / 女性", "Other / その他"])
@@ -81,12 +90,16 @@ def get_participant_info():
 
     info = dialog.show()
     if dialog.OK:
+        protocol = next(k for k, p in PROTOCOLS.items() if p["label"] == info[0])
         return {
-            "name": info[0],
-            "age": info[1],
-            "gender": info[2],
-            "handedness": info[3],
-            "date": datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "protocol": protocol,
+            "name": info[1],
+            "age": info[2],
+            "gender": info[3],
+            "handedness": info[4],
+            # screening.py/debrief.pyのファイル名もこの"date"から組み立てられるため、
+            # ここで版のサフィックスを付ければ全CSVのファイル名に反映される
+            "date": datetime.now().strftime("%Y%m%d_%H%M%S") + PROTOCOLS[protocol]["file_suffix"],
         }
     else:
         core.quit()
@@ -96,16 +109,18 @@ def get_participant_info():
 # data/ フォルダに保存する（カレントディレクトリ依存だと保存先がバラバラになるため）
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
-def get_next_participant_number(data_dir):
-    """既存データ（sub-NN_*.csv、*_precision.csv を除く）の最大番号+1を次の参加者番号として自動採番する。
-    短時間版と精度重視版は別々に採番する（精度重視版は time_reproduction_precision.py 側で *_precision.csv のみを数える）。
+def get_next_participant_number(data_dir, protocol):
+    """既存データ（同じ版の sub-NN_*.csv）の最大番号+1を次の参加者番号として自動採番する。
+    短時間版と精度重視版は別々に採番する（精度重視版は *_precision.csv のみ、短時間版はそれ以外を数える）。
     件数ではなく最大番号を使うのは、欠番があっても番号が重複しないようにするため。
     離脱者・旧パラダイムのデータは data/ 直下から excluded/ 等のサブフォルダへ移すこと（数えない）。"""
     if not os.path.isdir(data_dir):
         return 1
+    is_precision = protocol == "precision"
     numbers = [
         int(m.group(1)) for f in os.listdir(data_dir)
-        if (m := re.match(r"sub-(\d+)_", f)) and f.endswith(".csv") and not f.endswith("_precision.csv")
+        if (m := re.match(r"sub-(\d+)_", f)) and f.endswith(".csv")
+        and f.endswith("_precision.csv") == is_precision
     ]
     return max(numbers, default=0) + 1
 
@@ -144,12 +159,12 @@ def setup_data_file(participant_info, participant_number):
             "participant_name", "condition", "target_duration",
             "reproduced_duration", "error", "relative_error",
             "trial_number", "block_number", "is_practice",
-            "timestamp"
+            "timestamp", "protocol_version"
         ])
     return filename
 
 def save_trial(filename, participant_name, condition, target, reproduced,
-               trial_num, block_num, is_practice):
+               trial_num, block_num, is_practice, protocol):
     """1試行のデータを保存"""
     error = reproduced - target
     relative_error = error / target
@@ -160,7 +175,7 @@ def save_trial(filename, participant_name, condition, target, reproduced,
             participant_name, condition, target,
             reproduced, error, relative_error,
             trial_num, block_num, is_practice,
-            datetime.now().strftime("%Y%m%d_%H%M%S.%f")
+            datetime.now().strftime("%Y%m%d_%H%M%S.%f"), protocol
         ])
 
 # ===== 教示画面 =====
@@ -322,7 +337,7 @@ def run_trial(win, target_duration):
 
 # ===== 条件ブロック =====
 def run_condition_block(win, condition, block_num, filename, participant_name,
-                        is_practice=False):
+                        protocol, is_practice=False):
     """
     1つの条件ブロックを実行する
     """
@@ -352,7 +367,7 @@ def run_condition_block(win, condition, block_num, filename, participant_name,
     show_instruction(win, task_instruction)
 
     # --- 試行リストの作成 ---
-    trials = TARGET_DURATIONS * TRIALS_PER_CELL
+    trials = TARGET_DURATIONS * PROTOCOLS[protocol]["trials_per_cell"]
 
     random.shuffle(trials)
 
@@ -364,7 +379,7 @@ def run_condition_block(win, condition, block_num, filename, participant_name,
         if not is_practice:
             save_trial(
                 filename, participant_name, condition_name,
-                target, reproduced, trial_num + 1, block_num, is_practice
+                target, reproduced, trial_num + 1, block_num, is_practice, protocol
             )
 
         # フィードバックなし（意図的）
@@ -380,14 +395,16 @@ def main():
     # 参加者情報取得
     participant_info = get_participant_info()
     participant_name = participant_info["name"]
+    protocol = participant_info["protocol"]
 
-    # 参加者番号の自動採番
-    participant_number = get_next_participant_number(DATA_DIR)
+    # 参加者番号の自動採番（版ごとに別々）
+    participant_number = get_next_participant_number(DATA_DIR, protocol)
 
     # 条件提示順序をカウンターバランスで決定（完了者の中で最も使われていない順序を選ぶ）
     order_idx = choose_counterbalance_order(DATA_DIR)
     ordered_conditions = [CONDITIONS[i] for i in COUNTERBALANCE_ORDERS[order_idx]]
 
+    print(f"版: {PROTOCOLS[protocol]['label']}")
     print(f"参加者: {participant_name}（{participant_number}人目）")
     print(f"条件順序: {[c['name'] for c in ordered_conditions]}")
 
@@ -467,7 +484,7 @@ def main():
         # 条件ブロックの実行
         run_condition_block(
             win, condition, block_num + 1,
-            filename, participant_name
+            filename, participant_name, protocol
         )
 
         # ブロック間休憩: 2番目と3番目のブロックの間のみ、全員CONDITION_BREAK_SEC秒、強制的に休憩
