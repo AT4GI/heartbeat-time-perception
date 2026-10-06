@@ -85,4 +85,4 @@ PsychoPy本体に同梱されたPythonを明示して実行する（PowerShell�
   ```powershell
   & "C:\Program Files\PsychoPy\python.exe" heart_time_experiment\saq.py
   ```
-- デブリーフィングで「数を数えたか」を確認し、数えていたデータは除外する
+- デブリーフィングで「数を数えたか」を確認する。数えていた参加者は主要分析では除外せず、感度分析でのみ除外する
