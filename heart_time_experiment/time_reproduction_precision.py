@@ -26,6 +26,7 @@ time_reproduction.py（TRIALS_PER_CELL=2、短時間版）の複製。
 from psychopy import visual, core, event, data, gui
 from psychopy.hardware.keyboard import Keyboard
 import random
+import re
 import csv
 import os
 import pyglet
@@ -102,18 +103,19 @@ def get_participant_info():
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 def get_next_participant_number(data_dir):
-    """既存データ（sub-*_precision.csv）の件数から次の参加者番号を自動採番する。
-    精度重視版は "_precision" を含むファイルのみをカウントし、
+    """既存データ（sub-NN_*_precision.csv）の最大番号+1を次の参加者番号として自動採番する。
+    精度重視版は "_precision" を含むファイルのみを対象とし、
     time_reproduction.py（短時間版）の採番とは独立させる
     （過去にカウンターバランスの採番が混ざるバグを踏んでいるため、
-    2つのプロトコルで参加者を共有カウントしないようにする）。"""
+    2つのプロトコルで参加者を共有カウントしないようにする）。
+    件数ではなく最大番号を使うのは、欠番があっても番号が重複しないようにするため。"""
     if not os.path.isdir(data_dir):
         return 1
-    existing = [
-        f for f in os.listdir(data_dir)
-        if f.startswith("sub-") and f.endswith("_precision.csv")
+    numbers = [
+        int(m.group(1)) for f in os.listdir(data_dir)
+        if (m := re.match(r"sub-(\d+)_", f)) and f.endswith("_precision.csv")
     ]
-    return len(existing) + 1
+    return max(numbers, default=0) + 1
 
 def setup_data_file(participant_info, participant_number):
     """データファイルのセットアップ"""

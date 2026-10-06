@@ -20,6 +20,7 @@ time_reproduction.py
 from psychopy import visual, core, event, data, gui
 from psychopy.hardware.keyboard import Keyboard
 import random
+import re
 import csv
 import os
 import pyglet
@@ -96,11 +97,16 @@ def get_participant_info():
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 def get_next_participant_number(data_dir):
-    """既存データ（sub-*.csv）の件数から次の参加者番号を自動採番する。"""
+    """既存データ（sub-NN_*.csv）の最大番号+1を次の参加者番号として自動採番する。
+    件数ではなく最大番号を使うのは、ファイルの欠番・旧形式（番号なし）ファイルがあっても
+    番号が重複しないようにするため。精度重視版（*_precision.csv）は独立採番なので除外する。"""
     if not os.path.isdir(data_dir):
         return 1
-    existing = [f for f in os.listdir(data_dir) if f.startswith("sub-") and f.endswith(".csv")]
-    return len(existing) + 1
+    numbers = [
+        int(m.group(1)) for f in os.listdir(data_dir)
+        if (m := re.match(r"sub-(\d+)_", f)) and f.endswith(".csv") and not f.endswith("_precision.csv")
+    ]
+    return max(numbers, default=0) + 1
 
 def setup_data_file(participant_info, participant_number):
     """データファイルのセットアップ"""
