@@ -375,42 +375,8 @@ def main():
     extreme = trials[(trials["reproduced"] / trials["target"] < 0.25) | (trials["reproduced"] / trials["target"] > 3)]
     report += [f"- 極端な試行（再生/提示 < 0.25 または > 3）：{len(extreme)}試行（除外はしていない）", ""]
 
-    # --- 4.2 条件ごとの記述統計 ---
-    pmeans = trials.groupby(["pid", "condition", "target"])["rel_error"].mean().reset_index()
-    desc = pmeans.groupby(["condition", "target"])["rel_error"].agg(["mean", "std", "count"]).reset_index()
-    desc["condition"] = pd.Categorical(desc["condition"], CONDITIONS)
-    desc = desc.sort_values(["condition", "target"])
-    desc["target"] = desc["target"].astype(int)
-    overall = pmeans.groupby(["pid", "condition"])["rel_error"].mean().groupby("condition").agg(["mean", "std"]).reindex(CONDITIONS).reset_index()
-    report += ["## 4.2 条件ごとの時間再生誤差（相対誤差、参加者平均ベース）", "", "### 条件 × 提示時間", "", fmt_table(desc), "",
-               "### 条件（3つの提示時間で平均）", "", fmt_table(overall), "", "![](fig_condition_duration.png)", ""]
-    plot_condition_duration(trials, OUTPUT_DIR / "fig_condition_duration.png", args.blind)
-
-    # --- 4.4 主要分析：線形混合効果モデル ---
-    report += ["## 4.4 統計分析", "", "### 主要分析：線形混合効果モデル",
-               "`rel_error ~ 条件（基準：true_heartbeat）× 提示時間（効果コーディング）+ (1 | 参加者)`、REML推定", ""]
-    main_fit = fit_lmm(trials)
-    om = omnibus_condition(main_fit)
-    report += [f"- 条件の主効果（Wald検定）：χ²({om['df']}) = {om['chi2']:.2f}, p = {om['p']:.3f}", "",
-               fmt_contrasts(main_contrasts(main_fit)), "",
-               "<details><summary>モデルの全係数</summary>", "", "```", str(main_fit.summary()), "```", "</details>", ""]
-
-    # --- 補助：反復測定分散分析 ---
-    try:
-        aov = rm_anova(trials).reset_index().rename(columns={"index": "要因"})
-        report += ["### 補助分析：反復測定分散分析（参加者×条件×提示時間の平均値）", "", fmt_table(aov), ""]
-    except Exception as e:  # データが少なすぎる場合など
-        report += [f"### 補助分析：反復測定分散分析", "", f"実行できませんでした：{e}", ""]
-
-    # --- 4.3 SAQによる調整効果 ---
-    report += ["## 4.3 SAQと時間再生の関係", ""]
-    report += saq_moderation(trials, completed, "saq_total28", "SAQ合計（28項目）")
-    report += ["### 探索的：SAQの2因子別（Longarzo et al., 2015。項目30は両因子に含む）", ""]
-    report += saq_moderation(trials, completed, "saq_visceral", "F1 内臓感覚（15項目）")
-    report += saq_moderation(trials, completed, "saq_somatic", "F2 体性感覚（14項目）")
-
-    # --- 操作チェック：心拍らしさの評定 ---
-    report += ["## 操作チェック：心拍らしさの評定（1〜5）", ""]
+    # --- 4.2 操作チェック：心拍らしさの評定 ---
+    report += ["## 4.2 操作チェック：心拍らしさの評定（1〜5）", ""]
     if not ratings.empty:
         rdesc = ratings.groupby("condition")["hb_rating"].agg(["mean", "std", "count"]).reindex(HEARTBEAT_CONDITIONS).reset_index()
         report += [fmt_table(rdesc), ""]
@@ -429,8 +395,42 @@ def main():
     else:
         report += ["評定データなし。", ""]
 
-    # --- 感度分析 ---
-    report += ["## 感度分析（主要分析の対比が以下の条件で変わるか）", ""]
+    # --- 4.3 条件ごとの記述統計 ---
+    pmeans = trials.groupby(["pid", "condition", "target"])["rel_error"].mean().reset_index()
+    desc = pmeans.groupby(["condition", "target"])["rel_error"].agg(["mean", "std", "count"]).reset_index()
+    desc["condition"] = pd.Categorical(desc["condition"], CONDITIONS)
+    desc = desc.sort_values(["condition", "target"])
+    desc["target"] = desc["target"].astype(int)
+    overall = pmeans.groupby(["pid", "condition"])["rel_error"].mean().groupby("condition").agg(["mean", "std"]).reindex(CONDITIONS).reset_index()
+    report += ["## 4.3 条件ごとの時間再生誤差（記述統計：相対誤差、参加者平均ベース）", "", "### 条件 × 提示時間", "", fmt_table(desc), "",
+               "### 条件（3つの提示時間で平均）", "", fmt_table(overall), "", "![](fig_condition_duration.png)", ""]
+    plot_condition_duration(trials, OUTPUT_DIR / "fig_condition_duration.png", args.blind)
+
+    # --- 4.4 主要分析：線形混合効果モデル ---
+    report += ["## 4.4 主要分析：偽心拍条件の効果（線形混合効果モデル）", "",
+               "`rel_error ~ 条件（基準：true_heartbeat）× 提示時間（効果コーディング）+ (1 | 参加者)`、REML推定", ""]
+    main_fit = fit_lmm(trials)
+    om = omnibus_condition(main_fit)
+    report += [f"- 条件の主効果（Wald検定）：χ²({om['df']}) = {om['chi2']:.2f}, p = {om['p']:.3f}", "",
+               fmt_contrasts(main_contrasts(main_fit)), "",
+               "<details><summary>モデルの全係数</summary>", "", "```", str(main_fit.summary()), "```", "</details>", ""]
+
+    # --- 補助：反復測定分散分析 ---
+    try:
+        aov = rm_anova(trials).reset_index().rename(columns={"index": "要因"})
+        report += ["### 補助分析：反復測定分散分析（参加者×条件×提示時間の平均値）", "", fmt_table(aov), ""]
+    except Exception as e:  # データが少なすぎる場合など
+        report += [f"### 補助分析：反復測定分散分析", "", f"実行できませんでした：{e}", ""]
+
+    # --- 4.5 SAQによる調整効果 ---
+    report += ["## 4.5 SAQによる調整効果", ""]
+    report += saq_moderation(trials, completed, "saq_total28", "SAQ合計（28項目）")
+    report += ["### 探索的：SAQの2因子別（Longarzo et al., 2015。項目30は両因子に含む）", ""]
+    report += saq_moderation(trials, completed, "saq_visceral", "F1 内臓感覚（15項目）")
+    report += saq_moderation(trials, completed, "saq_somatic", "F2 体性感覚（14項目）")
+
+    # --- 4.6 感度分析 ---
+    report += ["## 4.6 感度分析（主要分析の対比が以下の条件で変わるか）", ""]
     subsets = {
         "BLE修正後の参加者のみ": (trials[trials["ble"] == "post"], ""),
         "版を共変量に追加": (trials, " + C(protocol)"),
@@ -448,12 +448,12 @@ def main():
         except Exception as e:
             report += [f"### {label}（{n}名）", "", f"実行できませんでした：{e}", ""]
 
-    # --- 探索的分析 ---
+    # --- 4.7 探索的分析 ---
     cv = trials.groupby(["pid", "target"])["reproduced"].agg(lambda x: x.std() / x.mean()).groupby("target").agg(["mean", "std"]).reset_index()
     bias = pmeans.groupby(["pid", "target"])["rel_error"].mean().groupby("target").agg(["mean", "std"]).reset_index()
     bias["target"] = bias["target"].astype(int)
     cv["target"] = cv["target"].astype(int)
-    report += ["## 探索的分析", "", "### 提示時間ごとの偏り（相対誤差、全条件）", "", fmt_table(bias), "",
+    report += ["## 4.7 探索的分析：提示時間ごとの偏りとばらつき", "", "### 提示時間ごとの偏り（相対誤差、全条件）", "", fmt_table(bias), "",
                "### 提示時間ごとのばらつき（変動係数 CV = SD/M、参加者ごとに算出）", "", fmt_table(cv), ""]
 
     participants.drop(columns=["key"]).to_csv(OUTPUT_DIR / "participants.csv", index=False, encoding="utf-8-sig")
