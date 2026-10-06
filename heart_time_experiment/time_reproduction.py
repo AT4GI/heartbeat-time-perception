@@ -50,7 +50,7 @@ CONDITIONS = [
     {"name": "no_vibration",   "label": "条件D", "instruction": "これは振動なしの区間です"},
 ]
 
-# 4条件の提示順序パターン（カウンターバランス）。参加者番号に応じて選ぶ。
+# 4条件の提示順序パターン（カウンターバランス）。完了者の中で使用回数が最も少ないものを選ぶ。
 COUNTERBALANCE_ORDERS = [
     [0, 1, 2, 3],
     [1, 2, 3, 0],
@@ -98,15 +98,37 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 def get_next_participant_number(data_dir):
     """既存データ（sub-NN_*.csv）の最大番号+1を次の参加者番号として自動採番する。
-    件数ではなく最大番号を使うのは、ファイルの欠番・旧形式（番号なし）ファイルがあっても
-    番号が重複しないようにするため。精度重視版（*_precision.csv）は独立採番なので除外する。"""
+    参加者番号は短時間版・精度重視版で共通の通し番号（精度重視版の *_precision.csv も含めて数える）。
+    件数ではなく最大番号を使うのは、欠番があっても番号が重複しないようにするため。
+    離脱者・旧パラダイムのデータは data/ 直下から excluded/ 等のサブフォルダへ移すこと（数えない）。"""
     if not os.path.isdir(data_dir):
         return 1
     numbers = [
         int(m.group(1)) for f in os.listdir(data_dir)
-        if (m := re.match(r"sub-(\d+)_", f)) and f.endswith(".csv") and not f.endswith("_precision.csv")
+        if (m := re.match(r"sub-(\d+)_", f)) and f.endswith(".csv")
     ]
     return max(numbers, default=0) + 1
+
+def choose_counterbalance_order(data_dir):
+    """完了済み参加者（4ブロック完走、短時間版・精度重視版共通）の中で
+    使用回数が最も少ない条件順序のインデックスを返す（同数なら小さいインデックス）。
+    参加者番号から機械的に決めないのは、途中離脱者や既存データの順序の偏りを
+    次の参加者で埋めて、最終的に8パターンをできるだけ均等にするため。"""
+    counts = [0] * len(COUNTERBALANCE_ORDERS)
+    if os.path.isdir(data_dir):
+        name_to_idx = {c["name"]: i for i, c in enumerate(CONDITIONS)}
+        for f in os.listdir(data_dir):
+            if not (re.match(r"sub-\d+_", f) and f.endswith(".csv")):
+                continue
+            order = []
+            with open(os.path.join(data_dir, f), newline="", encoding="utf-8") as fh:
+                for row in csv.DictReader(fh):
+                    idx = name_to_idx.get(row.get("condition"))
+                    if idx is not None and (not order or order[-1] != idx):
+                        order.append(idx)
+            if order in COUNTERBALANCE_ORDERS:
+                counts[COUNTERBALANCE_ORDERS.index(order)] += 1
+    return counts.index(min(counts))
 
 def setup_data_file(participant_info, participant_number):
     """データファイルのセットアップ"""
@@ -362,8 +384,8 @@ def main():
     # 参加者番号の自動採番
     participant_number = get_next_participant_number(DATA_DIR)
 
-    # 条件提示順序をカウンターバランスで決定（参加者番号に応じて8パターンを巡回）
-    order_idx = (participant_number - 1) % len(COUNTERBALANCE_ORDERS)
+    # 条件提示順序をカウンターバランスで決定（完了者の中で最も使われていない順序を選ぶ）
+    order_idx = choose_counterbalance_order(DATA_DIR)
     ordered_conditions = [CONDITIONS[i] for i in COUNTERBALANCE_ORDERS[order_idx]]
 
     print(f"参加者: {participant_name}（{participant_number}人目）")
