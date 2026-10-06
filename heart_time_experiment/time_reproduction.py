@@ -97,20 +97,20 @@ def get_participant_info():
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 def get_next_participant_number(data_dir):
-    """既存データ（sub-NN_*.csv）の最大番号+1を次の参加者番号として自動採番する。
-    参加者番号は短時間版・精度重視版で共通の通し番号（精度重視版の *_precision.csv も含めて数える）。
+    """既存データ（sub-NN_*.csv、*_precision.csv を除く）の最大番号+1を次の参加者番号として自動採番する。
+    短時間版と精度重視版は別々に採番する（精度重視版は time_reproduction_precision.py 側で *_precision.csv のみを数える）。
     件数ではなく最大番号を使うのは、欠番があっても番号が重複しないようにするため。
     離脱者・旧パラダイムのデータは data/ 直下から excluded/ 等のサブフォルダへ移すこと（数えない）。"""
     if not os.path.isdir(data_dir):
         return 1
     numbers = [
         int(m.group(1)) for f in os.listdir(data_dir)
-        if (m := re.match(r"sub-(\d+)_", f)) and f.endswith(".csv")
+        if (m := re.match(r"sub-(\d+)_", f)) and f.endswith(".csv") and not f.endswith("_precision.csv")
     ]
     return max(numbers, default=0) + 1
 
 def choose_counterbalance_order(data_dir):
-    """完了済み参加者（4ブロック完走、短時間版・精度重視版共通）の中で
+    """完了済み参加者（4ブロック完走。番号は版ごとに別だが、順序の均等化は両版を合わせて行う）の中で
     使用回数が最も少ない条件順序のインデックスを返す（同数なら小さいインデックス）。
     参加者番号から機械的に決めないのは、途中離脱者や既存データの順序の偏りを
     次の参加者で埋めて、最終的に8パターンをできるだけ均等にするため。"""
