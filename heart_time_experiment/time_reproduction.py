@@ -5,7 +5,7 @@ time_reproduction.py
 - 画面の点灯・消灯で時間区間を提示
 - 被験者がボタンを押している時間を記録
 - Woojerは別プロセス（woojer_controller.py）で制御
-- SAQは事前に別途実施
+- SAQは全試行終了後、デブリーフィングの中で実施（debrief.py → saq.py）
 - 版（短時間版／精度重視版）は参加者情報ダイアログで選ぶ（PROTOCOLS参照）
 
 課題の流れ:

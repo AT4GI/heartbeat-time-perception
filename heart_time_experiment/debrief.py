@@ -12,6 +12,8 @@ no_vibration条件の追加により、心拍らしさの評定（HB1〜HB4）�
 心拍なしセクションとして扱う（回答させない）。
 保存時にその参加者の実際の条件順序（ordered_conditions）と突き合わせて、
 block_position・condition_nameの両方をCSVに記録する。
+
+デブリーフィングの質問の後に、SAQ（saq.py、全35項目）を続けて実施する。
 """
 
 import csv
@@ -21,6 +23,7 @@ from datetime import datetime
 from psychopy import core, gui
 
 from ui_utils import show_message, YES_LABEL, NO_LABEL
+from saq import run_saq
 
 # (item_id, 質問(日本語), question(English))
 DEBRIEF_ITEMS = [
@@ -114,6 +117,11 @@ def run_debrief(win, participant_info, data_dir, ordered_conditions):
 
     win.winHandle.activate()
     _save_debrief(participant_info, responses, ordered_conditions, data_dir)
+
+    # SAQ（内受容感受性の個人差指標）。ブロックの記憶が新しいうちに心拍らしさを
+    # 評定してもらいたいので、デブリーフィングの質問の後に実施する。
+    # 偽心拍であることの口頭説明は、SAQの回答が終わってから行う。
+    run_saq(win, participant_info, data_dir)
 
     end_text = (
         "ご協力ありがとうございました。これで実験は終了です。\n"

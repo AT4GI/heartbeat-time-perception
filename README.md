@@ -80,5 +80,9 @@ PsychoPy本体に同梱されたPythonを明示して実行する（PowerShell�
 
 - ズレ幅（fast_false/slow_false の倍率）はパイロット実験で確定してから
   `woojer_controller.py` の `CONDITION_MULTIPLIERS` に設定する
-- SAQは事前に別途実施する
+- SAQ（全35項目）は全試行終了後、デブリーフィングの質問に続けて実施する（`debrief.py` → `saq.py`、結果は`data/saq-*.csv`）
+- 既存参加者に後からSAQだけ回答してもらう場合は`saq.py`を単独で起動する（ファイル名に`_posthoc`が付く）
+  ```powershell
+  & "C:\Program Files\PsychoPy\python.exe" heart_time_experiment\saq.py
+  ```
 - デブリーフィングで「数を数えたか」を確認し、数えていたデータは除外する

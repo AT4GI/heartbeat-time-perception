@@ -12,7 +12,7 @@ Yes/No等の質問はキー入力ではなく、プルダウン選択（マウ�
 日本語・英語を併記し、海外からの参加者にも対応する。
 
 SAQ（Self-Awareness Questionnaire、内受容感受性の個人差指標）とは別物。
-SAQは全試行終了後に別途実施する（time_reproduction.py側の役割ではない）。
+SAQは全試行終了後、debrief.pyの中でsaq.pyにより実施する。
 """
 
 import csv
