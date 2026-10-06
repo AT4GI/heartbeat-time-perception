@@ -47,6 +47,12 @@ INITIAL_COHORT_BEFORE = datetime(2026, 10, 6)  # これより前の参加者＝�
 
 # SAQ: 原著で除外推奨の7項目を除く28項目の合計を用いる（saq.pyと同じ定義）
 SAQ_EXCLUDED_ITEMS = {1, 2, 5, 8, 20, 22, 29}
+# 2因子の項目構成（Longarzo et al., 2015, Results・Table 2）。
+# 項目30は両因子にほぼ同じ負荷（F1 .32 / F2 .31）を持ち、原著本文でも両方の因子に含めて記載されているため、両方の下位尺度に入れる
+SAQ_FACTORS = {
+    "saq_visceral": [3, 6, 7, 12, 13, 17, 19, 21, 23, 26, 27, 30, 32, 33, 35],   # F1：内臓感覚（15項目、0〜60）
+    "saq_somatic":  [4, 9, 10, 11, 14, 15, 16, 18, 24, 25, 28, 30, 31, 34],      # F2：体性感覚（14項目、0〜56）
+}
 
 # 楽器経験年数（screening.pyのINSTRUMENT_YEARS_CHOICES）→ 順序尺度（0=経験なし）
 MUSIC_YEARS_LEVELS = {
@@ -161,10 +167,13 @@ def load_saq(data_dir, key, name_norm):
             df = pd.read_csv(path, encoding="utf-8")
             items = df[df["item_id"].str.match(r"SAQ\d{2}$")].copy()
             items["no"] = items["item_id"].str[3:].astype(int)
-            scored = items[~items["no"].isin(SAQ_EXCLUDED_ITEMS)]
-            return {"saq_total28": scored["response"].astype(int).sum(),
-                    "saq_source": "posthoc" if path.stem.endswith("_posthoc") else "session"}
-    return {"saq_total28": np.nan, "saq_source": "missing"}
+            score = dict(zip(items["no"], items["response"].astype(int)))
+            out = {"saq_total28": sum(v for k, v in score.items() if k not in SAQ_EXCLUDED_ITEMS)}
+            for factor, nos in SAQ_FACTORS.items():
+                out[factor] = sum(score[n] for n in nos)
+            out["saq_source"] = "posthoc" if path.stem.endswith("_posthoc") else "session"
+            return out
+    return {"saq_total28": np.nan, **{f: np.nan for f in SAQ_FACTORS}, "saq_source": "missing"}
 
 
 def build_dataset(data_dir, blind, seed):
@@ -251,6 +260,25 @@ def rm_anova(trials):
     return AnovaRM(complete, "rel_error", "pid", within=["condition", "target"]).fit().anova_table
 
 
+def saq_moderation(trials, completed, col, label):
+    """rel_error ~ 条件 × SAQ得点（中心化）+ 提示時間 + (1 | 参加者) の交互作用をレポート行として返す。"""
+    import statsmodels.formula.api as smf
+    saq = completed[["pid", col]].dropna()
+    if len(saq) < 3:
+        return [f"- {label}：回答者が{len(saq)}名のため実行しない（3名以上で実行）", ""]
+    tr = trials.merge(saq, on="pid")
+    tr["saq_c"] = tr[col] - tr[col].mean()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        fit = smf.mixedlm("rel_error ~ C(condition, Treatment('true_heartbeat')) * saq_c + C(target, Sum)", tr, groups=tr["pid"]).fit(reml=True)
+    inter = [n for n in fit.params.index if ":saq_c" in n]
+    w = fit.wald_test(fe_selector(fit, inter), scalar=True)
+    rows = pd.DataFrame({"項": inter, "係数": fit.params[inter].values, "SE": fit.bse[inter].values, "p": fit.pvalues[inter].values})
+    return [f"#### {label}（{len(saq)}名、平均 {saq[col].mean():.1f}, SD {saq[col].std():.1f}）", "",
+            f"`rel_error ~ 条件 × SAQ（中心化）+ 提示時間 + (1 | 参加者)`。条件 × SAQ の交互作用（Wald検定）：χ²({len(inter)}) = {float(w.statistic):.2f}, p = {float(w.pvalue):.3f}", "",
+            fmt_table(rows, "{:.4f}"), ""]
+
+
 # ===== 出力 =====
 def fmt_table(df, floatfmt="{:.3f}"):
     cols = list(df.columns)
@@ -335,7 +363,7 @@ def main():
                f"- 完了者：{len(completed)}名（最終N={TARGET_N}）、分析試行数：{len(trials)}", ""]
 
     # --- 4.1 取得データの概要 ---
-    pt = completed[["pid", "protocol", "n_trials", "ble", "initial_cohort", "counted", "music_level", "music_ongoing", "saq_total28", "saq_source"]]
+    pt = completed[["pid", "protocol", "n_trials", "ble", "initial_cohort", "counted", "music_level", "music_ongoing", "saq_total28", "saq_visceral", "saq_somatic", "saq_source"]]
     report += ["## 4.1 取得データの概要", "", fmt_table(pt, "{:.0f}"), ""]
     if len(participants) > len(completed):
         report += [f"未完了のため除外：{', '.join(participants.loc[~participants['completed'], 'pid'])}", ""]
@@ -375,23 +403,11 @@ def main():
         report += [f"### 補助分析：反復測定分散分析", "", f"実行できませんでした：{e}", ""]
 
     # --- 4.3 SAQによる調整効果 ---
-    saq = completed[["pid", "saq_total28"]].dropna()
     report += ["## 4.3 SAQと時間再生の関係", ""]
-    if len(saq) >= 3:
-        tr = trials.merge(saq, on="pid")
-        tr["saq_c"] = tr["saq_total28"] - tr["saq_total28"].mean()
-        import statsmodels.formula.api as smf
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            fit = smf.mixedlm("rel_error ~ C(condition, Treatment('true_heartbeat')) * saq_c + C(target, Sum)", tr, groups=tr["pid"]).fit(reml=True)
-        inter = [n for n in fit.params.index if ":saq_c" in n]
-        w = fit.wald_test(fe_selector(fit, inter), scalar=True)
-        rows = pd.DataFrame({"項": inter, "係数": fit.params[inter].values, "SE": fit.bse[inter].values, "p": fit.pvalues[inter].values})
-        report += [f"SAQ回答者 {len(saq)}名。`rel_error ~ 条件 × SAQ（中心化）+ 提示時間 + (1 | 参加者)`", "",
-                   f"- 条件 × SAQ の交互作用（Wald検定）：χ²({len(inter)}) = {float(w.statistic):.2f}, p = {float(w.pvalue):.3f}", "",
-                   fmt_table(rows, "{:.4f}"), ""]
-    else:
-        report += [f"SAQ回答者が{len(saq)}名のため実行しない（3名以上で実行）。", ""]
+    report += saq_moderation(trials, completed, "saq_total28", "SAQ合計（28項目）")
+    report += ["### 探索的：SAQの2因子別（Longarzo et al., 2015。項目30は両因子に含む）", ""]
+    report += saq_moderation(trials, completed, "saq_visceral", "F1 内臓感覚（15項目）")
+    report += saq_moderation(trials, completed, "saq_somatic", "F2 体性感覚（14項目）")
 
     # --- 操作チェック：心拍らしさの評定 ---
     report += ["## 操作チェック：心拍らしさの評定（1〜5）", ""]
