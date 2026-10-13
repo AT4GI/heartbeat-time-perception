@@ -10,6 +10,7 @@ time_reproduction.py
 
 課題の流れ:
   0. スクリーニング質問紙（安全確認・除外基準チェック、screening.py）
+  0.5 振動チェック（5秒、ゆっくりの固定テンポ。感じなければ実験者に申告）
   1. 慣れフェーズ（60秒間）: Woojerで振動を当てながら待機
   2. 練習試行（各時間2試行）
   3. 本試行（4秒・8秒・12秒 × 各N試行 × 4条件）
@@ -49,6 +50,8 @@ PROTOCOLS = {
 HABITUATION_SEC = 60                       # 慣れフェーズ（60秒）
 INTER_TRIAL_INTERVAL = 2.0                 # 試行間インターバル（秒）
 CONDITION_BREAK_SEC = 60                   # 休憩（60秒、ブロック2と3の間のみ、全員強制的に待機）
+VIBRATION_CHECK_SEC = 5                    # 振動チェック（5秒、スクリーニング直後）
+VIBRATION_CHECK_RATE = 0.5                 # 振動チェックのテンポ（Hz。0.5 = 30回/分のゆっくりした振動、心拍計とは無関係）
 
 # 条件設定
 CONDITIONS = [
@@ -218,7 +221,7 @@ def show_text_and_wait(win, text, duration):
 def habituation_phase(win, condition_name, condition_instruction, duration=HABITUATION_SEC):
     """
     慣れフェーズ: 振動を当てながら待機（デフォルトはHABITUATION_SEC秒）
-    被験者は目を閉じて座っているだけ。
+    被験者はリラックスして座っているだけ（目を閉じる指示はしない）。
     no_vibrationでは振動開始のOSCを送らない（振動なし条件のため）。
     """
     is_no_vibration = condition_name == "no_vibration"
@@ -241,8 +244,8 @@ def habituation_phase(win, condition_name, condition_instruction, duration=HABIT
             stim.text = (
                 f"これから{duration}秒間、振動はありません。\n"
                 f"There will be no vibration for the next {duration} seconds.\n\n"
-                f"目を閉じて、リラックスして座っていてください。\n"
-                f"Please close your eyes and sit comfortably.\n\n"
+                f"リラックスして座っていてください。\n"
+                f"Please sit back and relax.\n\n"
                 f"何もする必要はありません。\n"
                 f"You do not need to do anything."
             )
@@ -251,8 +254,8 @@ def habituation_phase(win, condition_name, condition_instruction, duration=HABIT
                 f"これから{duration}秒間、振動を体験していただきます。\n"
                 f"You will experience vibration for {duration} seconds.\n\n"
                 f"【{condition_instruction}】\n\n"
-                f"目を閉じて、リラックスして座っていてください。\n"
-                f"Please close your eyes and sit comfortably.\n\n"
+                f"リラックスして座っていてください。\n"
+                f"Please sit back and relax.\n\n"
                 f"何もする必要はありません。\n"
                 f"You do not need to do anything."
             )
@@ -263,6 +266,48 @@ def habituation_phase(win, condition_name, condition_instruction, duration=HABIT
         if event.getKeys(["escape"]):
             send_osc("/heartbeat/stop")
             core.quit()
+
+# ===== 振動チェック =====
+def vibration_check(win, duration=VIBRATION_CHECK_SEC):
+    """
+    スクリーニング後・本番前に、Woojerが振動するかを確認する。
+    心拍計とは無関係の固定テンポ（VIBRATION_CHECK_RATE）で duration 秒だけ振動させる。
+    振動している前提で進め、感じなかった場合のみ参加者が実験者に申告する。
+    """
+    send_osc("/heartbeat/rate", VIBRATION_CHECK_RATE)
+
+    stim = visual.TextStim(
+        win,
+        text=(
+            "振動のチェックをしています。\n"
+            "Checking the vibration.\n\n"
+            "胸のデバイスが振動しているか確認してください。\n"
+            "Please check that the device on your chest is vibrating."
+        ),
+        height=0.06, wrapWidth=1.7,
+        color="white"
+    )
+
+    timer = core.CountdownTimer(duration)
+    while timer.getTime() > 0:
+        stim.draw()
+        win.flip()
+
+        # ESCで強制終了
+        if event.getKeys(["escape"]):
+            send_osc("/heartbeat/stop")
+            core.quit()
+
+    send_osc("/heartbeat/stop")
+
+    show_instruction(win, (
+        "振動のチェックは終わりです。\n"
+        "The vibration check is complete.\n\n"
+        "振動を感じなかった場合は、実験者にお伝えください。\n"
+        "If you did not feel any vibration, please tell the experimenter.\n\n"
+        "準備ができたらスペースキーを押してください。\n"
+        "Press SPACE when you are ready."
+    ))
 
 # ===== 条件間休憩 =====
 def break_phase(win, duration):
@@ -447,6 +492,10 @@ def main():
     # ===== スクリーニング質問紙（安全確認・除外基準チェック） =====
     # 振動デバイスを胸に装着する前に実施する
     run_screening(win, participant_info, data_dir)
+
+    # ===== 振動チェック =====
+    # スクリーニング（安全確認）の後に行う。デバイス装着後に実施すること
+    vibration_check(win)
 
     # ===== 実験開始の教示 =====
     welcome_text = (

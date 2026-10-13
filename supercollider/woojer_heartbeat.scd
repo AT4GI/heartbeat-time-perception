@@ -14,6 +14,7 @@ OSCメッセージ一覧:
   /heartbeat/start              : 振動開始（現在の rawBpm × 条件倍率 で rate 決定）
   /heartbeat/stop               : 振動停止
   /heartbeat/bpm [raw_bpm]      : HW706 からの生BPM更新（倍率を適用してSynth更新）
+  /heartbeat/rate [Hz]          : 固定テンポで振動開始（振動チェック用。次の /heartbeat/condition までBPM更新を無視）
 
 起動手順:
   1. 管理者コマンドプロンプトで net stop winnat
@@ -129,7 +130,8 @@ Routine {
                 mult = ~conditionMultipliers[~currentCondition] ? 1.0;
                 adjustedBpm = rawBpm * mult;
                 rate = adjustedBpm / 60.0;
-                if (~heartbeatSynth.notNil) {
+                // /heartbeat/rate で固定テンポ中（振動チェック等）は実測BPMで上書きしない
+                if (~heartbeatSynth.notNil and: { ~currentCondition != "fixed_rate" }) {
                     ~heartbeatSynth.set(\rate, rate);
                 };
                 ("BPM: 実測=" ++ rawBpm.round(1)
@@ -139,10 +141,12 @@ Routine {
             } { |e| ("ERROR /heartbeat/bpm: " ++ e.errorString).postln };
         }, '/heartbeat/bpm');
 
-        // /heartbeat/rate [rate]  ← パイロット実験用（倍率テーブルを迂回して直接指定）
+        // /heartbeat/rate [rate]  ← 振動チェック・パイロット実験用（倍率テーブルを迂回して直接指定）
+        //   次に /heartbeat/condition が来るまで、/heartbeat/bpm によるテンポ更新を止める
         OSCdef(\setRate, { |msg|
             try {
                 var rate = msg[1] ? 1.2;
+                ~currentCondition = "fixed_rate";
                 if (~heartbeatSynth.notNil) { ~heartbeatSynth.free };
                 ~heartbeatSynth = Synth(\fakeHeartbeat, [\rate, rate, \amp, 0.9]);
                 ("パイロット: " ++ (rate * 60).round(1) ++ "BPM").postln;
