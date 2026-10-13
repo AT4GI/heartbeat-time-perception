@@ -155,23 +155,22 @@ def choose_counterbalance_order(data_dir):
                 counts[COUNTERBALANCE_ORDERS.index(order)] += 1
     return counts.index(min(counts))
 
+TRIAL_CSV_HEADER = [
+    "participant_name", "condition", "target_duration",
+    "reproduced_duration", "error", "relative_error",
+    "trial_number", "block_number", "is_practice",
+    "timestamp", "protocol_version"
+]
+
 def setup_data_file(participant_info, participant_number, data_dir):
-    """データファイルのセットアップ"""
+    """データファイルのパスを決める。
+    ファイル自体は最初の本試行を保存するとき（save_trial）に作る。開始直後に中断した回の
+    空ファイルが残ると、採番に数えられて次の参加者の番号が飛ぶため（2026-10-06に発生）。"""
     os.makedirs(data_dir, exist_ok=True)
-    filename = os.path.join(
+    return os.path.join(
         data_dir,
         f"sub-{participant_number:02d}_{participant_info['name']}_{participant_info['date']}.csv"
     )
-
-    with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "participant_name", "condition", "target_duration",
-            "reproduced_duration", "error", "relative_error",
-            "trial_number", "block_number", "is_practice",
-            "timestamp", "protocol_version"
-        ])
-    return filename
 
 def save_trial(filename, participant_name, condition, target, reproduced,
                trial_num, block_num, is_practice, protocol):
@@ -179,8 +178,11 @@ def save_trial(filename, participant_name, condition, target, reproduced,
     error = reproduced - target
     relative_error = error / target
 
+    is_new_file = not os.path.exists(filename)
     with open(filename, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
+        if is_new_file:
+            writer.writerow(TRIAL_CSV_HEADER)
         writer.writerow([
             participant_name, condition, target,
             reproduced, error, relative_error,
