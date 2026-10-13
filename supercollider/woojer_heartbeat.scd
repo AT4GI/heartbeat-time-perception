@@ -35,7 +35,10 @@ Routine {
         0.5.wait;  // ポート解放の余裕
     };
 
-    s.options.outDevice  = "WASAPI : スピーカー (Woojer Strap Edge)";
+    // Bluetooth 再ペアリングで "スピーカー (2- Woojer Strap Edge)" のように名前が変わるため部分一致で探す
+    s.options.outDevice  = ServerOptions.outDevices.detect { |d|
+        d.contains("WASAPI") and: { d.contains("スピーカー") } and: { d.contains("Woojer") }
+    } ?? { "Woojer の WASAPI スピーカーが見つかりません".warn; nil };
     s.options.inDevice   = "WASAPI : Surfaceステレオマイク";
     s.addr_(NetAddr("127.0.0.1", 57210));
 
