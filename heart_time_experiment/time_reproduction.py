@@ -193,6 +193,25 @@ def save_trial(filename, participant_name, condition, target, reproduced,
             datetime.now().strftime("%Y%m%d_%H%M%S.%f"), protocol
         ])
 
+def save_demographics(participant_info, participant_number, data_dir):
+    """参加者情報ダイアログの年齢・性別・利き手を demographics-*.csv に保存する。
+    2026-10-19までは入力させるだけでどこにも保存しておらず、論文の参加者記述に使えなかったため追加。
+    ファイル名は screening/debrief と同じく名前＋日時なので、同じ回の他のCSVと対応づけられる。"""
+    os.makedirs(data_dir, exist_ok=True)
+    filename = os.path.join(
+        data_dir,
+        f"demographics-{participant_info['name']}_{participant_info['date']}.csv"
+    )
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["participant_name", "participant_number", "protocol_version",
+                         "age", "gender", "handedness", "timestamp"])
+        writer.writerow([
+            participant_info["name"], participant_number, participant_info["protocol"],
+            participant_info["age"], participant_info["gender"], participant_info["handedness"],
+            datetime.now().strftime("%Y%m%d_%H%M%S.%f"),
+        ])
+
 # ===== 教示画面 =====
 def show_instruction(win, text, wait_key="space"):
     """教示テキストを表示してキー待ち"""
@@ -471,6 +490,7 @@ def main():
 
     # データファイルのセットアップ
     filename = setup_data_file(participant_info, participant_number, data_dir)
+    save_demographics(participant_info, participant_number, data_dir)
 
     # ウィンドウの作成
     # 排他的フルスクリーン(fullscr=True)はWindowsでキーボードフォーカスが
