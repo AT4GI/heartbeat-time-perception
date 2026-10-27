@@ -4,6 +4,11 @@ woojer_controller.py
 HW706 BLE 心拍センサーから生BPMを取得し、SuperCollider に送信する。
 条件倍率は SC 側（woojer_heartbeat.scd）が管理する。
 
+HW706 から通知を受けるたびに、日時・BPM・RR-Interval・通知間隔を
+heart_time_experiment/data/hr/hr-<開始日時>.csv に記録する（2026-10-27追加）。
+参加者名は記録しないので、試行CSVの timestamp と日時で対応付ける。
+SC への送信内容・タイミングは変わらない。
+
 起動方法:
   python woojer_controller.py             # 通常モード（HW706 が必要）
   python woojer_controller.py --simulate  # シミュレーションモード（HW706 不要、固定BPM=72）
@@ -16,6 +21,9 @@ import asyncio
 import struct
 import argparse
 import time
+import csv
+from datetime import datetime
+from pathlib import Path
 from bleak import BleakScanner, BleakClient
 from pythonosc import udp_client
 
@@ -27,6 +35,36 @@ HEART_RATE_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 
 osc_client  = udp_client.SimpleUDPClient(SC_IP, SC_PORT)
 current_bpm = 72.0   # HW706 からの最新生BPM（SC 側で倍率を適用）
+
+HR_LOG_DIR = Path(__file__).resolve().parent.parent / "heart_time_experiment" / "data" / "hr"
+
+# ===== 心拍ログ =====
+
+class HeartRateLog:
+    """HW706 の通知ごとに1行書く。試行CSVと同じ "%Y%m%d_%H%M%S.%f" 形式の日時で対応付けられる。"""
+
+    def __init__(self, simulated=False):
+        HR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        suffix = "_simulate" if simulated else ""
+        self.path = HR_LOG_DIR / f"hr-{datetime.now():%Y%m%d_%H%M%S}{suffix}.csv"
+        self._file = open(self.path, "w", newline="", encoding="utf-8")
+        self._writer = csv.writer(self._file)
+        self._writer.writerow(["timestamp", "bpm", "rr_intervals_sec", "notify_interval_sec"])
+        self._last = None
+        print(f"心拍ログ: {self.path}")
+
+    def write(self, bpm, rr_values=()):
+        now = time.perf_counter()
+        interval = f"{now - self._last:.3f}" if self._last is not None else ""
+        self._last = now
+        self._writer.writerow([f"{datetime.now():%Y%m%d_%H%M%S.%f}", bpm,
+                               ";".join(f"{rr:.3f}" for rr in rr_values), interval])
+        self._file.flush()  # 途中で強制終了しても、それまでの行は残す
+
+    def close(self):
+        self._file.close()
+
+hr_log = None
 
 # ===== OSC 送信ユーティリティ =====
 
@@ -54,8 +92,21 @@ def send_stop():
 
 def heartrate_callback(sender, data: bytearray):
     flags = data[0]
-    bpm   = struct.unpack_from('<H', data, 1)[0] if (flags & 0x01) else data[1]
+    bpm_is_u16 = bool(flags & 0x01)
+    bpm = struct.unpack_from('<H', data, 1)[0] if bpm_is_u16 else data[1]
     send_raw_bpm(float(bpm))
+
+    # RR-Interval（bit4, 0x10）が含まれていれば拍-拍間隔（秒）を取り出す
+    rr_values = []
+    if flags & 0x10:
+        offset = 3 if bpm_is_u16 else 2
+        if flags & 0x08:  # Energy Expended（2バイト）がRRの前に入る
+            offset += 2
+        while offset + 1 < len(data):
+            rr_values.append(struct.unpack_from('<H', data, offset)[0] / 1024.0)  # 1/1024秒単位 → 秒
+            offset += 2
+    if hr_log:
+        hr_log.write(bpm, rr_values)
 
 # ===== BLE 検索 =====
 
@@ -205,6 +256,7 @@ async def run_simulate():
     async def bpm_loop():
         while True:
             send_raw_bpm(72.0)
+            hr_log.write(72)
             await asyncio.sleep(5.0)
 
     bpm_task = asyncio.create_task(bpm_loop())
@@ -221,10 +273,16 @@ async def main():
     )
     args = parser.parse_args()
 
-    if args.simulate:
-        await run_simulate()
-    else:
-        await run_with_hw706()
+    global hr_log
+    hr_log = HeartRateLog(simulated=args.simulate)
+    try:
+        if args.simulate:
+            await run_simulate()
+        else:
+            await run_with_hw706()
+    finally:
+        hr_log.close()
+        print(f"心拍ログを保存しました: {hr_log.path}")
 
 if __name__ == "__main__":
     asyncio.run(main())
