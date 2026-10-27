@@ -199,18 +199,11 @@ const ITEMS_PER_PAGE = 9;
 function createSaqForm() {
   const form = FormApp.create("身体感覚に関するアンケート / SAQ");
   form.setDescription(
-    "普段の身体の感覚についてのアンケートです（全35問）。
-" +
-    "Please answer a questionnaire about your everyday bodily sensations (35 items).
-
-" +
-    "実験中の感覚ではなく、普段の感覚についてお答えください。
-" +
-    "Please answer about how you usually feel, not about the experiment.
-
-" +
-    "普段、どのくらいの頻度でその感覚を経験するかをお答えください。正解・不正解はありません。
-" +
+    "普段の身体の感覚についてのアンケートです（全35問）。\n" +
+    "Please answer a questionnaire about your everyday bodily sensations (35 items).\n\n" +
+    "実験中の感覚ではなく、普段の感覚についてお答えください。\n" +
+    "Please answer about how you usually feel, not about the experiment.\n\n" +
+    "普段、どのくらいの頻度でその感覚を経験するかをお答えください。正解・不正解はありません。\n" +
     "How often do you usually feel each sensation? There are no right or wrong answers."
   );
   form.setCollectEmail(false);
@@ -221,8 +214,7 @@ function createSaqForm() {
 
   form.addTextItem()
     .setTitle("名前 / Name")
-    .setHelpText("実験時と同じ表記で入力してください（データの対応付けに使います）
-Enter your name exactly as entered in the experiment")
+    .setHelpText("実験時と同じ表記で入力してください（データの対応付けに使います）\nEnter your name exactly as entered in the experiment")
     .setRequired(true);
 
   SAQ_ITEMS.forEach(function (item, i) {
@@ -237,8 +229,7 @@ Enter your name exactly as entered in the experiment")
       .setRequired(true);
   });
 
-  form.setConfirmationMessage("ご協力ありがとうございました。
-Thank you.");
+  form.setConfirmationMessage("ご協力ありがとうございました。\nThank you.");
   Logger.log("回答用URL（参加者に送る）: " + form.getPublishedUrl());
   Logger.log("編集用URL（自分用）: " + form.getEditUrl());
 }
