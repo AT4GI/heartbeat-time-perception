@@ -54,6 +54,13 @@ SAQ_FACTORS = {
     "saq_somatic":  [4, 9, 10, 11, 14, 15, 16, 18, 24, 25, 28, 30, 31, 34],      # F2：体性感覚（14項目、0〜56）
 }
 
+# 試行の除外（2026-11-10決定、論文草稿3.8節）：再生時間がこれ未満の試行はキーの押し間違いとみなして全分析から除外する
+MIN_REPRODUCED_SEC = 0.5
+
+# 打楽器経験（2026-11-10決定、案A）：ドラム・パーカッション類の経験があれば期間を問わず「あり」。
+# スクリーニングC2の楽器名は自由記述なので、表記ゆれ（dram など）も拾う
+PERCUSSION_RE = re.compile(r"dru?m|dram|percussion|ドラム|パーカッション|打楽器|太鼓|カホン|cajon", re.IGNORECASE)
+
 # 楽器経験年数（screening.pyのINSTRUMENT_YEARS_CHOICES）→ 順序尺度（0=経験なし）
 MUSIC_YEARS_LEVELS = {
     "6ヶ月未満": 1, "6ヶ月以上1年未満": 2, "1年以上2年未満": 3,
@@ -122,20 +129,23 @@ def load_participants(data_dir):
 
 
 def load_screening(data_dir, key):
-    """screening-<key>.csv から共変量（音楽経験）を取り出す。"""
+    """screening-<key>.csv から音楽経験（楽器経験の有無・打楽器経験の有無・最長の経験年数）を取り出す。"""
     path = data_dir / f"screening-{key}.csv"
-    out = {"music_level": np.nan, "music_ongoing": np.nan}
+    out = {"music_any": np.nan, "percussion_any": np.nan, "music_level": np.nan, "music_ongoing": np.nan}
     if not path.exists():
         return out
     df = pd.read_csv(path, encoding="utf-8").set_index("item_id")
     if "C2" not in df.index:
         return out
     if not str(df.loc["C2", "response"]).startswith("はい"):
-        return {"music_level": 0, "music_ongoing": False}
+        return {"music_any": False, "percussion_any": False, "music_level": 0, "music_ongoing": False}
     info = str(df.loc["C2", "additional_info"])
     levels = [lv for label, lv in MUSIC_YEARS_LEVELS.items() if label in info]
+    # 楽器名は「楽器名 (年数, 継続/終了); 楽器名 (…)」の形。括弧の外の楽器名だけで打楽器かを判定する
+    instruments = [part.split("(")[0].strip() for part in info.split(";")]
     # 複数楽器の場合は最も長い経験年数を採用する
-    return {"music_level": max(levels) if levels else np.nan, "music_ongoing": "継続中" in info}
+    return {"music_any": True, "percussion_any": any(PERCUSSION_RE.search(i) for i in instruments),
+            "music_level": max(levels) if levels else np.nan, "music_ongoing": "継続中" in info}
 
 
 def load_debrief(data_dir, key):
@@ -279,6 +289,36 @@ def saq_moderation(trials, completed, col, label):
             fmt_table(rows, "{:.4f}"), ""]
 
 
+def group_exploration(trials, completed, col, label):
+    """探索的分析：参加者のグループ（あり／なし）ごとに条件の対比を推定し、条件 × グループの交互作用を見る。
+    グループの人数が少ないため、有意差ではなく推定値と信頼区間を記述的に示す。"""
+    import statsmodels.formula.api as smf
+    groups = completed[["pid", col]].dropna()
+    groups = groups.assign(group=groups[col].astype(bool))
+    counts = groups["group"].value_counts()
+    lines = [f"### {label}", "", f"あり {counts.get(True, 0)}名 / なし {counts.get(False, 0)}名（判定不能 {len(completed) - len(groups)}名）", ""]
+    if counts.get(True, 0) < 2 or counts.get(False, 0) < 2:
+        return lines + ["各グループ2名以上で実行する。", ""]
+    tr = trials.merge(groups[["pid", "group"]], on="pid")
+    tr["group_c"] = tr["group"].astype(float) - tr["group"].astype(float).mean()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fit = smf.mixedlm("rel_error ~ C(condition, Treatment('true_heartbeat')) * group_c + C(target, Sum)", tr, groups=tr["pid"]).fit(reml=True)
+        inter = [n for n in fit.params.index if ":group_c" in n]
+        w = fit.wald_test(fe_selector(fit, inter), scalar=True)
+        lines += [f"`rel_error ~ 条件 × グループ（中心化）+ 提示時間 + (1 | 参加者)`。条件 × グループの交互作用（Wald検定、参考値）：χ²({len(inter)}) = {float(w.statistic):.2f}, p = {float(w.pvalue):.3f}", ""]
+    except Exception as e:
+        lines += [f"交互作用モデルは実行できませんでした：{e}", ""]
+    for value, name in [(True, "あり"), (False, "なし")]:
+        sub = tr[tr["group"] == value]
+        try:
+            lines += [f"#### {name}（{sub['pid'].nunique()}名）", "", fmt_contrasts(main_contrasts(fit_lmm(sub))), ""]
+        except Exception as e:
+            lines += [f"#### {name}（{sub['pid'].nunique()}名）", "", f"実行できませんでした：{e}", ""]
+    return lines
+
+
 # ===== 出力 =====
 def fmt_table(df, floatfmt="{:.3f}"):
     cols = list(df.columns)
@@ -354,6 +394,9 @@ def main():
                  "途中で検定しない方針のため、--blind でのみ実行できます。")
     trials = trials[trials["pid"].isin(completed["pid"])]
     ratings = ratings[ratings["pid"].isin(completed["pid"])]
+    # 再生時間が MIN_REPRODUCED_SEC 未満の試行（キーの押し間違い）を全分析から除外する
+    too_short = trials[trials["reproduced"] < MIN_REPRODUCED_SEC]
+    trials = trials[trials["reproduced"] >= MIN_REPRODUCED_SEC]
     trials = trials.merge(completed[["pid", "protocol", "ble", "initial_cohort", "counted"]], on="pid")
 
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -363,17 +406,20 @@ def main():
                f"- 完了者：{len(completed)}名（最終N={TARGET_N}）、分析試行数：{len(trials)}", ""]
 
     # --- 4.1 取得データの概要 ---
-    pt = completed[["pid", "protocol", "n_trials", "ble", "initial_cohort", "counted", "music_level", "music_ongoing", "saq_total28", "saq_visceral", "saq_somatic", "saq_source"]]
+    pt = completed[["pid", "protocol", "n_trials", "ble", "initial_cohort", "counted", "music_any", "percussion_any", "music_level", "music_ongoing", "saq_total28", "saq_visceral", "saq_somatic", "saq_source"]]
     report += ["## 4.1 取得データの概要", "", fmt_table(pt, "{:.0f}"), ""]
     if len(participants) > len(completed):
         report += [f"未完了のため除外：{', '.join(participants.loc[~participants['completed'], 'pid'])}", ""]
     report += [f"- 版：短時間版 {(pt['protocol'] == 'short').sum()}名 / 精度重視版 {(pt['protocol'] == 'precision').sum()}名",
                f"- BLE修正後の実施：{(pt['ble'] == 'post').sum()}名",
                f"- 秒数を数えたと回答：{int(pt['counted'].fillna(False).sum())}名",
+               f"- 楽器経験あり：{int(pt['music_any'].fillna(False).sum())}名（うち打楽器経験あり {int(pt['percussion_any'].fillna(False).sum())}名）",
                f"- SAQ：実験時 {(pt['saq_source'] == 'session').sum()}名 / 事後 {(pt['saq_source'] == 'posthoc').sum()}名 / 未回答 {(pt['saq_source'] == 'missing').sum()}名",
                f"- 条件順序の使用回数：" + ", ".join(f"{k}: {v}" for k, v in completed["condition_order"].value_counts().items()), ""]
     extreme = trials[(trials["reproduced"] / trials["target"] < 0.25) | (trials["reproduced"] / trials["target"] > 3)]
-    report += [f"- 極端な試行（再生/提示 < 0.25 または > 3）：{len(extreme)}試行（除外はしていない）", ""]
+    report += [f"- 除外した試行（再生時間 < {MIN_REPRODUCED_SEC}秒、キーの押し間違い）：{len(too_short)}試行"
+               + (f"（{', '.join(f'{k}: {v}' for k, v in too_short['pid'].value_counts().sort_index().items())}）" if len(too_short) else ""),
+               f"- 極端な試行（再生/提示 < 0.25 または > 3、上の除外後）：{len(extreme)}試行（除外はしていない）", ""]
 
     # --- 4.2 操作チェック：心拍らしさの評定 ---
     report += ["## 4.2 操作チェック：心拍らしさの評定（1〜5）", ""]
@@ -434,6 +480,7 @@ def main():
     subsets = {
         "BLE修正後の参加者のみ": (trials[trials["ble"] == "post"], ""),
         "版を共変量に追加": (trials, " + C(protocol)"),
+        "短時間版のみ（精度重視版を除外）": (trials[trials["protocol"] == "short"], ""),
         "初期参加者を除外": (trials[~trials["initial_cohort"]], ""),
         "秒数を数えた参加者を除外": (trials[trials["counted"] != True], ""),
     }
@@ -455,6 +502,10 @@ def main():
     cv["target"] = cv["target"].astype(int)
     report += ["## 4.7 探索的分析：提示時間ごとの偏りとばらつき", "", "### 提示時間ごとの偏り（相対誤差、全条件）", "", fmt_table(bias), "",
                "### 提示時間ごとのばらつき（変動係数 CV = SD/M、参加者ごとに算出）", "", fmt_table(cv), ""]
+    report += ["## 4.7 探索的分析：音楽経験・打楽器経験", "",
+               "人数が少ないため、グループごとの対比の推定値と95%信頼区間を記述的に示す（有意差は主張しない）。", ""]
+    report += group_exploration(trials, completed, "music_any", "楽器経験の有無")
+    report += group_exploration(trials, completed, "percussion_any", "打楽器経験の有無（ドラム・パーカッション、期間を問わない）")
 
     participants.drop(columns=["key"]).to_csv(OUTPUT_DIR / "participants.csv", index=False, encoding="utf-8-sig")
     trials.to_csv(OUTPUT_DIR / "trials.csv", index=False, encoding="utf-8-sig")
