@@ -430,13 +430,16 @@ def main():
         if len(wide) >= 3 and set(HEARTBEAT_CONDITIONS) <= set(wide.columns):
             fr = stats.friedmanchisquare(*[wide[c] for c in HEARTBEAT_CONDITIONS])
             report += [f"- Friedman検定（3条件、{len(wide)}名）：χ²(2) = {fr.statistic:.2f}, p = {fr.pvalue:.3f}"]
-        # 評定と時間再生誤差の関係（参加者内で中心化した値どうしの相関）
+        # 評定と時間再生誤差の関係：反復測定相関（rmcorr; Bakdash & Marusich, 2017）。
+        # 参加者内で中心化したうえで、自由度を「観測数 − 参加者数 − 1」とする（51件を独立とみなすとpが小さく出すぎる。2026-11-10修正）
         cm = trials.groupby(["pid", "condition"])["rel_error"].mean().reset_index().merge(ratings, on=["pid", "condition"])
         if len(cm) >= 5:
             for col in ["rel_error", "hb_rating"]:
                 cm[col + "_w"] = cm[col] - cm.groupby("pid")[col].transform("mean")
-            r = stats.spearmanr(cm["hb_rating_w"], cm["rel_error_w"])
-            report += [f"- 心拍らしさ × 相対誤差（参加者内で中心化、Spearman）：ρ = {r.statistic:.3f}, p = {r.pvalue:.3f}, n = {len(cm)}"]
+            r = float(np.corrcoef(cm["hb_rating_w"], cm["rel_error_w"])[0, 1])
+            dfree = len(cm) - cm["pid"].nunique() - 1
+            p = 2 * stats.t.sf(abs(r) * np.sqrt(dfree / (1 - r ** 2)), dfree) if dfree > 0 and abs(r) < 1 else np.nan
+            report += [f"- 心拍らしさ × 相対誤差（反復測定相関 rmcorr）：r = {r:.3f}, df = {dfree}, p = {p:.3f}（{cm['pid'].nunique()}名 × 条件）"]
         report += [""]
     else:
         report += ["評定データなし。", ""]
