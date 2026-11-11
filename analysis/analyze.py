@@ -250,11 +250,9 @@ def main_contrasts(result):
 
 
 def paired_contrasts(trials):
-    """感度分析⑥：参加者ごとの条件平均の差に対する対応のあるt検定（2026-11-11追加、20名の本番実行前に決定）。
-    主要分析の混合モデルはランダム切片のみで、条件の効果の個人差を考慮しないため、試行を独立に数えてpが小さめに出うる。
-    ここでは参加者を1単位とする。各参加者の条件平均は、提示時間ごとの平均をさらに平均したもの（試行数の偏りを除く）。"""
-    pm = (trials.groupby(["pid", "condition", "target"])["rel_error"].mean()
-          .groupby(["pid", "condition"]).mean().unstack())
+    """主要分析（2026-11-11に混合モデルから変更、20名の本番実行前に決定）：参加者ごとの条件平均の差に対する対応のあるt検定。
+    参加者を1単位とする。各参加者の条件平均は、提示時間ごとの平均をさらに平均したもの（版による試行数の違いを除く）。"""
+    pm = participant_condition_means(trials)
     diffs = {
         "fast − slow（仮説の中心）": pm["fast_false"] - pm["slow_false"],
         "fast − true": pm["fast_false"] - pm["true_heartbeat"],
@@ -271,6 +269,33 @@ def paired_contrasts(trials):
                      f"t({n - 1})": float(tres.statistic), "p": float(tres.pvalue), "dz": m / sd,
                      "差が正の人数": f"{int((d > 0).sum())}/{n}"})
     return pd.DataFrame(rows)
+
+
+def participant_condition_means(trials):
+    """参加者 × 条件の平均（提示時間ごとの平均をさらに平均）。行＝参加者、列＝条件。"""
+    return (trials.groupby(["pid", "condition", "target"])["rel_error"].mean()
+            .groupby(["pid", "condition"]).mean().unstack())
+
+
+def saq_correlation(trials, completed, col, label):
+    """仮説3の主要分析：SAQ得点と、参加者ごとの条件差（fast − slow など）のPearson相関。"""
+    pm = participant_condition_means(trials)
+    effects = {
+        "fast − slow": pm["fast_false"] - pm["slow_false"],
+        "fast − true": pm["fast_false"] - pm["true_heartbeat"],
+        "slow − true": pm["slow_false"] - pm["true_heartbeat"],
+    }
+    saq = completed.set_index("pid")[col].dropna()
+    rows = []
+    for name, d in effects.items():
+        both = pd.concat([saq, d.rename("d")], axis=1, join="inner").dropna()
+        if len(both) < 4:
+            continue
+        r, p = stats.pearsonr(both[col], both["d"])
+        rows.append({"条件差": name, "N": len(both), "r": r, "p": p})
+    if not rows:
+        return [f"- {label}：回答者が少ないため実行しない", ""]
+    return [f"#### {label}（平均 {saq.mean():.1f}, SD {saq.std():.1f}）", "", fmt_table(pd.DataFrame(rows)), ""]
 
 
 def fe_selector(result, names):
@@ -488,51 +513,53 @@ def main():
     plot_condition_duration(trials, OUTPUT_DIR / "fig_condition_duration.png", args.blind)
 
     # --- 4.4 主要分析：線形混合効果モデル ---
-    report += ["## 4.4 主要分析：偽心拍条件の効果（線形混合効果モデル）", "",
-               "`rel_error ~ 条件（基準：true_heartbeat）× 提示時間（効果コーディング）+ (1 | 参加者)`、REML推定", ""]
+    # 主要分析は参加者平均にもとづく（2026-11-11に混合モデルから変更。20名の本番実行前）
+    report += ["## 4.4 主要分析：偽心拍条件の効果（参加者平均）", ""]
+    try:
+        aov = rm_anova(trials).reset_index().rename(columns={"index": "要因"})
+        report += ["### 反復測定分散分析（条件 × 提示時間、参加者×条件×提示時間の平均値）", "", fmt_table(aov), ""]
+    except Exception as e:  # データが少なすぎる場合など
+        report += ["### 反復測定分散分析", "", f"実行できませんでした：{e}", ""]
+    report += [f"### 対比：対応のあるt検定（{trials['pid'].nunique()}名）", "",
+               "各参加者の条件平均（提示時間ごとの平均をさらに平均）の差を、参加者を1単位として検定する。dz = 平均差 / 差のSD。", "",
+               fmt_table(paired_contrasts(trials)), ""]
+
+    # --- 補助：線形混合効果モデル（全試行） ---
     main_fit = fit_lmm(trials)
     om = omnibus_condition(main_fit)
-    report += [f"- 条件の主効果（Wald検定）：χ²({om['df']}) = {om['chi2']:.2f}, p = {om['p']:.3f}", "",
+    report += ["### 補助分析：線形混合効果モデル（全試行）", "",
+               "`rel_error ~ 条件（基準：true_heartbeat）× 提示時間（効果コーディング）+ (1 | 参加者)`、REML推定。"
+               "ランダム切片のみで条件の効果の個人差を含まないため、pは主要分析より小さめに出うる。", "",
+               f"- 条件の主効果（Wald検定）：χ²({om['df']}) = {om['chi2']:.2f}, p = {om['p']:.3f}", "",
                fmt_contrasts(main_contrasts(main_fit)), "",
                "<details><summary>モデルの全係数</summary>", "", "```", str(main_fit.summary()), "```", "</details>", ""]
 
-    # --- 補助：反復測定分散分析 ---
-    try:
-        aov = rm_anova(trials).reset_index().rename(columns={"index": "要因"})
-        report += ["### 補助分析：反復測定分散分析（参加者×条件×提示時間の平均値）", "", fmt_table(aov), ""]
-    except Exception as e:  # データが少なすぎる場合など
-        report += [f"### 補助分析：反復測定分散分析", "", f"実行できませんでした：{e}", ""]
-
     # --- 4.5 SAQによる調整効果 ---
-    report += ["## 4.5 SAQによる調整効果", ""]
+    report += ["## 4.5 SAQによる調整効果", "",
+               "主要分析：SAQ得点と、参加者ごとの条件差（条件平均の差）のPearson相関。", ""]
+    report += saq_correlation(trials, completed, "saq_total28", "SAQ合計（28項目）")
+    report += ["### 補助分析：混合モデルの条件 × SAQ交互作用", ""]
     report += saq_moderation(trials, completed, "saq_total28", "SAQ合計（28項目）")
     report += ["### 探索的：SAQの2因子別（Longarzo et al., 2015。項目30は両因子に含む）", ""]
-    report += saq_moderation(trials, completed, "saq_visceral", "F1 内臓感覚（15項目）")
-    report += saq_moderation(trials, completed, "saq_somatic", "F2 体性感覚（14項目）")
+    report += saq_correlation(trials, completed, "saq_visceral", "F1 内臓感覚（15項目）")
+    report += saq_correlation(trials, completed, "saq_somatic", "F2 体性感覚（14項目）")
 
     # --- 4.6 感度分析 ---
     report += ["## 4.6 感度分析（主要分析の対比が以下の条件で変わるか）", ""]
     subsets = {
-        "BLE修正後の参加者のみ": (trials[trials["ble"] == "post"], ""),
-        "版を共変量に追加": (trials, " + C(protocol)"),
-        "短時間版のみ（精度重視版を除外）": (trials[trials["protocol"] == "short"], ""),
-        "初期参加者を除外": (trials[~trials["initial_cohort"]], ""),
-        "秒数を数えた参加者を除外": (trials[trials["counted"] != True], ""),
-        "極端な試行を除外しない": (trials_with_extreme, ""),
+        "① BLE修正後の参加者のみ": trials[trials["ble"] == "post"],
+        "② 短時間版のみ（精度重視版を除外）": trials[trials["protocol"] == "short"],
+        "③ 初期参加者を除外": trials[~trials["initial_cohort"]],
+        "④ 秒数を数えた参加者を除外": trials[trials["counted"] != True],
+        "⑤ 極端な試行を除外しない": trials_with_extreme,
     }
-    for label, (df, extra) in subsets.items():
+    for label, df in subsets.items():
         n = df["pid"].nunique()
-        if n < 3 or (extra and df["protocol"].nunique() < 2):
-            report += [f"### {label}", "", f"実行しない（該当 {n}名、または版が1種類のみ）", ""]
+        if n < 3:
+            report += [f"### {label}", "", f"実行しない（該当 {n}名）", ""]
             continue
-        try:
-            fit = fit_lmm(df, extra)
-            report += [f"### {label}（{n}名）", "", fmt_contrasts(main_contrasts(fit)), ""]
-        except Exception as e:
-            report += [f"### {label}（{n}名）", "", f"実行できませんでした：{e}", ""]
-    report += [f"### 参加者単位の対応のあるt検定（{trials['pid'].nunique()}名）", "",
-               "各参加者の条件平均（提示時間ごとの平均をさらに平均）の差を、参加者を1単位として検定する。dz = 平均差 / 差のSD。", "",
-               fmt_table(paired_contrasts(trials)), ""]
+        report += [f"### {label}（{n}名）", "", fmt_table(paired_contrasts(df)), ""]
+    report += ["### ⑥ 線形混合効果モデル（全試行）", "", "4.4節の補助分析を参照。", ""]
 
     # --- 4.7 探索的分析 ---
     cv = trials.groupby(["pid", "target"])["reproduced"].agg(lambda x: x.std() / x.mean()).groupby("target").agg(["mean", "std"]).reset_index()
