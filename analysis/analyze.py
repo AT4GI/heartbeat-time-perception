@@ -248,6 +248,30 @@ def main_contrasts(result):
     }
 
 
+def paired_contrasts(trials):
+    """感度分析⑥：参加者ごとの条件平均の差に対する対応のあるt検定（2026-11-11追加、20名の本番実行前に決定）。
+    主要分析の混合モデルはランダム切片のみで、条件の効果の個人差を考慮しないため、試行を独立に数えてpが小さめに出うる。
+    ここでは参加者を1単位とする。各参加者の条件平均は、提示時間ごとの平均をさらに平均したもの（試行数の偏りを除く）。"""
+    pm = (trials.groupby(["pid", "condition", "target"])["rel_error"].mean()
+          .groupby(["pid", "condition"]).mean().unstack())
+    diffs = {
+        "fast − slow（仮説の中心）": pm["fast_false"] - pm["slow_false"],
+        "fast − true": pm["fast_false"] - pm["true_heartbeat"],
+        "slow − true": pm["slow_false"] - pm["true_heartbeat"],
+        "心拍3条件平均 − 振動なし（仮説4）": pm[HEARTBEAT_CONDITIONS].mean(axis=1) - pm["no_vibration"],
+    }
+    rows = []
+    for label, d in diffs.items():
+        d = d.dropna()
+        n, m, sd = len(d), d.mean(), d.std(ddof=1)
+        tres = stats.ttest_1samp(d, 0)
+        half = stats.t.ppf(0.975, n - 1) * sd / np.sqrt(n)
+        rows.append({"対比": label, "N": n, "平均差": m, "95%CI下限": m - half, "95%CI上限": m + half,
+                     f"t({n - 1})": float(tres.statistic), "p": float(tres.pvalue), "dz": m / sd,
+                     "差が正の人数": f"{int((d > 0).sum())}/{n}"})
+    return pd.DataFrame(rows)
+
+
 def fe_selector(result, names):
     """指定した固定効果がすべて0という帰無仮説の制約行列（wald_test用。列は全パラメータ＝固定効果＋分散成分）。"""
     params = list(result.params.index)
@@ -497,6 +521,9 @@ def main():
             report += [f"### {label}（{n}名）", "", fmt_contrasts(main_contrasts(fit)), ""]
         except Exception as e:
             report += [f"### {label}（{n}名）", "", f"実行できませんでした：{e}", ""]
+    report += [f"### 参加者単位の対応のあるt検定（{trials['pid'].nunique()}名）", "",
+               "各参加者の条件平均（提示時間ごとの平均をさらに平均）の差を、参加者を1単位として検定する。dz = 平均差 / 差のSD。", "",
+               fmt_table(paired_contrasts(trials)), ""]
 
     # --- 4.7 探索的分析 ---
     cv = trials.groupby(["pid", "target"])["reproduced"].agg(lambda x: x.std() / x.mean()).groupby("target").agg(["mean", "std"]).reset_index()
