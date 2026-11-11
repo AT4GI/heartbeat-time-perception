@@ -56,6 +56,7 @@ SAQ_FACTORS = {
 
 # 試行の除外（2026-11-10決定、論文草稿3.8節）：再生時間がこれ未満の試行はキーの押し間違いとみなして全分析から除外する
 MIN_REPRODUCED_SEC = 0.5
+EXTREME_RATIO = (0.25, 3.0)  # 再生/提示がこの範囲外の試行を除外（2026-11-11決定）
 
 # 打楽器経験（2026-11-10決定、案A）：ドラム・パーカッション類の経験があれば期間を問わず「あり」。
 # スクリーニングC2の楽器名は自由記述なので、表記ゆれ（dram など）も拾う
@@ -422,6 +423,13 @@ def main():
     too_short = trials[trials["reproduced"] < MIN_REPRODUCED_SEC]
     trials = trials[trials["reproduced"] >= MIN_REPRODUCED_SEC]
     trials = trials.merge(completed[["pid", "protocol", "ble", "initial_cohort", "counted"]], on="pid")
+    # 再生/提示が EXTREME_RATIO の範囲外の試行（課題に取り組めていない試行）も除外する（2026-11-11決定、20名の本番実行前）。
+    # 除外しない場合は感度分析⑦で報告する
+    ratio = trials["reproduced"] / trials["target"]
+    is_extreme = (ratio < EXTREME_RATIO[0]) | (ratio > EXTREME_RATIO[1])
+    extreme = trials[is_extreme]
+    trials_with_extreme = trials
+    trials = trials[~is_extreme]
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     report = []
@@ -440,10 +448,10 @@ def main():
                f"- 楽器経験あり：{int(pt['music_any'].fillna(False).sum())}名（うち打楽器経験あり {int(pt['percussion_any'].fillna(False).sum())}名）",
                f"- SAQ：実験時 {(pt['saq_source'] == 'session').sum()}名 / 事後 {(pt['saq_source'] == 'posthoc').sum()}名 / 未回答 {(pt['saq_source'] == 'missing').sum()}名",
                f"- 条件順序の使用回数：" + ", ".join(f"{k}: {v}" for k, v in completed["condition_order"].value_counts().items()), ""]
-    extreme = trials[(trials["reproduced"] / trials["target"] < 0.25) | (trials["reproduced"] / trials["target"] > 3)]
     report += [f"- 除外した試行（再生時間 < {MIN_REPRODUCED_SEC}秒、キーの押し間違い）：{len(too_short)}試行"
                + (f"（{', '.join(f'{k}: {v}' for k, v in too_short['pid'].value_counts().sort_index().items())}）" if len(too_short) else ""),
-               f"- 極端な試行（再生/提示 < 0.25 または > 3、上の除外後）：{len(extreme)}試行（除外はしていない）", ""]
+               f"- 除外した極端な試行（再生/提示 < {EXTREME_RATIO[0]} または > {EXTREME_RATIO[1]}、上の除外後）：{len(extreme)}試行"
+               + (f"（{', '.join(f'{r.pid} {r.condition} {r.target:.0f}秒→{r.reproduced:.2f}秒' for r in extreme.itertuples())}）" if len(extreme) else ""), ""]
 
     # --- 4.2 操作チェック：心拍らしさの評定 ---
     report += ["## 4.2 操作チェック：心拍らしさの評定（1〜5）", ""]
@@ -510,6 +518,7 @@ def main():
         "短時間版のみ（精度重視版を除外）": (trials[trials["protocol"] == "short"], ""),
         "初期参加者を除外": (trials[~trials["initial_cohort"]], ""),
         "秒数を数えた参加者を除外": (trials[trials["counted"] != True], ""),
+        "極端な試行を除外しない": (trials_with_extreme, ""),
     }
     for label, (df, extra) in subsets.items():
         n = df["pid"].nunique()
