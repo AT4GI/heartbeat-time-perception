@@ -449,7 +449,7 @@ def main():
     trials = trials[trials["reproduced"] >= MIN_REPRODUCED_SEC]
     trials = trials.merge(completed[["pid", "protocol", "ble", "initial_cohort", "counted"]], on="pid")
     # 再生/提示が EXTREME_RATIO の範囲外の試行（課題に取り組めていない試行）も除外する（2026-11-11決定、20名の本番実行前）。
-    # 除外しない場合は感度分析⑦で報告する
+    # 除外しない場合は感度分析④で報告する
     ratio = trials["reproduced"] / trials["target"]
     is_extreme = (ratio < EXTREME_RATIO[0]) | (ratio > EXTREME_RATIO[1])
     extreme = trials[is_extreme]
@@ -524,22 +524,10 @@ def main():
                "各参加者の条件平均（提示時間ごとの平均をさらに平均）の差を、参加者を1単位として検定する。dz = 平均差 / 差のSD。", "",
                fmt_table(paired_contrasts(trials)), ""]
 
-    # --- 補助：線形混合効果モデル（全試行） ---
-    main_fit = fit_lmm(trials)
-    om = omnibus_condition(main_fit)
-    report += ["### 補助分析：線形混合効果モデル（全試行）", "",
-               "`rel_error ~ 条件（基準：true_heartbeat）× 提示時間（効果コーディング）+ (1 | 参加者)`、REML推定。"
-               "ランダム切片のみで条件の効果の個人差を含まないため、pは主要分析より小さめに出うる。", "",
-               f"- 条件の主効果（Wald検定）：χ²({om['df']}) = {om['chi2']:.2f}, p = {om['p']:.3f}", "",
-               fmt_contrasts(main_contrasts(main_fit)), "",
-               "<details><summary>モデルの全係数</summary>", "", "```", str(main_fit.summary()), "```", "</details>", ""]
-
     # --- 4.5 SAQによる調整効果 ---
     report += ["## 4.5 SAQによる調整効果", "",
                "主要分析：SAQ得点と、参加者ごとの条件差（条件平均の差）のPearson相関。", ""]
     report += saq_correlation(trials, completed, "saq_total28", "SAQ合計（28項目）")
-    report += ["### 補助分析：混合モデルの条件 × SAQ交互作用", ""]
-    report += saq_moderation(trials, completed, "saq_total28", "SAQ合計（28項目）")
     report += ["### 探索的：SAQの2因子別（Longarzo et al., 2015。項目30は両因子に含む）", ""]
     report += saq_correlation(trials, completed, "saq_visceral", "F1 内臓感覚（15項目）")
     report += saq_correlation(trials, completed, "saq_somatic", "F2 体性感覚（14項目）")
@@ -549,9 +537,8 @@ def main():
     subsets = {
         "① BLE修正後の参加者のみ": trials[trials["ble"] == "post"],
         "② 短時間版のみ（精度重視版を除外）": trials[trials["protocol"] == "short"],
-        "③ 初期参加者を除外": trials[~trials["initial_cohort"]],
-        "④ 秒数を数えた参加者を除外": trials[trials["counted"] != True],
-        "⑤ 極端な試行を除外しない": trials_with_extreme,
+        "③ 秒数を数えた参加者を除外": trials[trials["counted"] != True],
+        "④ 極端な試行を除外しない": trials_with_extreme,
     }
     for label, df in subsets.items():
         n = df["pid"].nunique()
@@ -559,7 +546,17 @@ def main():
             report += [f"### {label}", "", f"実行しない（該当 {n}名）", ""]
             continue
         report += [f"### {label}（{n}名）", "", fmt_table(paired_contrasts(df)), ""]
-    report += ["### ⑥ 線形混合効果モデル（全試行）", "", "4.4節の補助分析を参照。", ""]
+    # ⑤ 線形混合効果モデル（全試行）。2026-11-17に4.4・4.5節の補助分析から感度分析へ移した
+    main_fit = fit_lmm(trials)
+    om = omnibus_condition(main_fit)
+    report += ["### ⑤ 線形混合効果モデル（全試行）", "",
+               "`rel_error ~ 条件（基準：true_heartbeat）× 提示時間（効果コーディング）+ (1 | 参加者)`、REML推定。"
+               "ランダム切片のみで条件の効果の個人差を含まないため、pは主要分析より小さめに出うる。", "",
+               f"- 条件の主効果（Wald検定）：χ²({om['df']}) = {om['chi2']:.2f}, p = {om['p']:.3f}", "",
+               fmt_contrasts(main_contrasts(main_fit)), "",
+               "<details><summary>モデルの全係数</summary>", "", "```", str(main_fit.summary()), "```", "</details>", ""]
+    report += ["#### 条件 × SAQ交互作用（仮説3）", ""]
+    report += saq_moderation(trials, completed, "saq_total28", "SAQ合計（28項目）")
 
     # --- 4.7 探索的分析 ---
     cv = trials.groupby(["pid", "target"])["reproduced"].agg(lambda x: x.std() / x.mean()).groupby("target").agg(["mean", "std"]).reset_index()
