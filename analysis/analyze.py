@@ -25,6 +25,7 @@ import re
 import sys
 import warnings
 from datetime import datetime
+from itertools import combinations
 from pathlib import Path
 
 import numpy as np
@@ -398,6 +399,20 @@ def fmt_seconds_table(trials):
     return "\n".join(lines)
 
 
+def fmt_pairwise_by_duration(trials):
+    """論文の表4.7：4条件の全6対について、提示時間ごとの相対誤差の差と、その3つの平均を示す。"""
+    cell = trials.groupby(["pid", "condition", "target"])["rel_error"].mean().unstack(["condition", "target"])
+    order = ["fast_false", "slow_false", "true_heartbeat", "no_vibration"]
+    sign = lambda v: ("+" if v > 0 else "−" if v < 0 else "±") + f"{abs(v) * 100:.1f}%"
+    lines = ["| 対比 | " + " | ".join(f"{t:g}秒" for t in DURATIONS) + " | 3つの平均 |", "|" + "---|" * (len(DURATIONS) + 2)]
+    for a, b in combinations(order, 2):
+        diffs = [(cell[(a, t)] - cell[(b, t)]).dropna() for t in DURATIONS]
+        avg = (cell[a].mean(axis=1) - cell[b].mean(axis=1)).dropna()
+        cells = [f"{sign(d.mean())}（{int((d > 0).sum())}/{len(d)}）" for d in diffs + [avg]]
+        lines.append(f"| {a} − {b} | " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 def fmt_contrasts(cons):
     df = pd.DataFrame([{"対比": k, "推定値": v["estimate"], "SE": v["se"],
                         "95%CI下限": v["ci_low"], "95%CI上限": v["ci_high"], "p": v["p"]} for k, v in cons.items()])
@@ -587,6 +602,10 @@ def main():
     cv["target"] = cv["target"].astype(int)
     report += ["## 4.7 探索的分析：提示時間ごとの偏りとばらつき", "", "### 提示時間ごとの偏り（相対誤差、全条件）", "", fmt_table(bias), "",
                "### 提示時間ごとのばらつき（変動係数 CV = SD/M、参加者ごとに算出）", "", fmt_table(cv), ""]
+    report += ["### 提示時間ごとの相対誤差の差（全6対）", "",
+               "論文の表4.7用。参加者ごとのセル平均の差の平均（%ポイント）、括弧内は差がプラスの人数。"
+               "「3つの平均」は4.4節の対比の平均差と同じ。記述的に示し、検定は行わない。", "",
+               fmt_pairwise_by_duration(trials), ""]
     report += ["## 4.7 探索的分析：音楽経験・打楽器経験", "",
                "人数が少ないため、グループごとの対比の推定値と95%信頼区間を記述的に示す（有意差は主張しない）。", ""]
     report += group_exploration(trials, completed, "music_any", "楽器経験の有無")
