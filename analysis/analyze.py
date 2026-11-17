@@ -379,6 +379,25 @@ def fmt_table(df, floatfmt="{:.3f}"):
     return "\n".join(lines)
 
 
+def fmt_seconds_table(trials):
+    """論文の表4.3：提示時間ごとに、平均再生時間・平均誤差（秒、相対誤差）・平均絶対誤差を条件別に示す。
+    参加者ごとに条件×提示時間のセルで平均してから、参加者間で平均する（主要分析と同じ集計）。"""
+    t = trials.assign(err=trials["reproduced"] - trials["target"])
+    t = t.assign(abs_err=t["err"].abs())
+    cell = t.groupby(["pid", "condition", "target"])[["reproduced", "err", "abs_err", "rel_error"]].mean()
+    g = cell.groupby(["target", "condition"]).mean()
+    sign = lambda v, d: ("+" if v > 0 else "−" if v < 0 else "±") + f"{abs(v):.{d}f}"
+    lines = ["| 提示時間 | 指標 | " + " | ".join(CONDITIONS) + " |", "|" + "---|" * (len(CONDITIONS) + 2)]
+    for target in DURATIONS:
+        rows = [("平均再生時間（秒）", lambda r: f"{r['reproduced']:.2f}"),
+                ("平均誤差（秒）[相対誤差]", lambda r: f"{sign(r['err'], 2)} [{sign(r['rel_error'] * 100, 1)}%]"),
+                ("平均絶対誤差（秒）", lambda r: f"{r['abs_err']:.2f}")]
+        for i, (label, f) in enumerate(rows):
+            cells = [f(g.loc[(target, c)]) if (target, c) in g.index else "" for c in CONDITIONS]
+            lines.append(f"| {f'{target:g}秒' if i == 0 else ''} | {label} | " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 def fmt_contrasts(cons):
     df = pd.DataFrame([{"対比": k, "推定値": v["estimate"], "SE": v["se"],
                         "95%CI下限": v["ci_low"], "95%CI上限": v["ci_high"], "p": v["p"]} for k, v in cons.items()])
@@ -510,6 +529,9 @@ def main():
     overall = pmeans.groupby(["pid", "condition"])["rel_error"].mean().groupby("condition").agg(["mean", "std"]).reindex(CONDITIONS).reset_index()
     report += ["## 4.3 条件ごとの時間再生誤差（記述統計：相対誤差、参加者平均ベース）", "", "### 条件 × 提示時間", "", fmt_table(desc), "",
                "### 条件（3つの提示時間で平均）", "", fmt_table(overall), "", "![](fig_condition_duration.png)", ""]
+    report += ["### 提示時間ごとの再生時間と誤差（秒）", "",
+               "論文の表4.3用。参加者ごとに条件×提示時間のセルで平均し、その参加者間の平均。誤差＝再生−提示（秒）、[ ]内は相対誤差。", "",
+               fmt_seconds_table(trials), ""]
     plot_condition_duration(trials, OUTPUT_DIR / "fig_condition_duration.png", args.blind)
 
     # --- 4.4 主要分析：線形混合効果モデル ---
